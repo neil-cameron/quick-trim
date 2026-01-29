@@ -61,6 +61,12 @@ struct QuickTrimApp: App {
                 .keyboardShortcut(" ", modifiers: [])
                 .disabled(appState.videoURL == nil)
 
+                Button("Go to Start") {
+                    appState.seekToStart()
+                }
+                .keyboardShortcut(.home, modifiers: [])
+                .disabled(appState.videoURL == nil)
+
                 Divider()
 
                 Button("Go Back 1 Frame") {

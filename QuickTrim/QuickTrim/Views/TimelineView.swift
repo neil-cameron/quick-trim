@@ -13,23 +13,37 @@ struct TimelineView: View {
     private let timecodeHeight: CGFloat = 20
     private let playheadWidth: CGFloat = 2
 
+    // Display time based on preview mode
+    private var displayCurrentTime: Double {
+        appState.previewModeEnabled ? appState.previewCurrentTime : appState.currentTime
+    }
+
+    private var displayDuration: Double {
+        appState.previewModeEnabled ? appState.previewDuration : appState.duration
+    }
+
     var body: some View {
         VStack(spacing: 0) {
             // Zoom controls and time display
             HStack {
                 // Current time readout
                 HStack(spacing: 4) {
-                    Image(systemName: "timer")
-                        .foregroundColor(.secondary)
-                    Text(formatTimecode(appState.currentTime))
+                    Image(systemName: appState.previewModeEnabled ? "eye" : "timer")
+                        .foregroundColor(appState.previewModeEnabled ? .accentColor : .secondary)
+                    Text(formatTimecode(displayCurrentTime))
                         .font(.system(.caption, design: .monospaced))
                         .foregroundColor(.primary)
+                    Text("/")
+                        .foregroundColor(.secondary)
+                    Text(formatTimecode(displayDuration))
+                        .font(.system(.caption, design: .monospaced))
+                        .foregroundColor(.secondary)
                 }
                 .padding(.horizontal, 8)
                 .padding(.vertical, 4)
                 .background(
                     RoundedRectangle(cornerRadius: 4)
-                        .fill(Color(nsColor: .controlBackgroundColor))
+                        .fill(appState.previewModeEnabled ? Color.accentColor.opacity(0.1) : Color(nsColor: .controlBackgroundColor))
                 )
 
                 Spacer()

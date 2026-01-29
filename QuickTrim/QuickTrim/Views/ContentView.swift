@@ -192,6 +192,12 @@ class KeyEventView: NSView {
             } else {
                 super.keyDown(with: event)
             }
+        case 115: // Home key
+            if modifiers.isEmpty {
+                appState.seekToStart()
+            } else {
+                super.keyDown(with: event)
+            }
         default:
             super.keyDown(with: event)
         }

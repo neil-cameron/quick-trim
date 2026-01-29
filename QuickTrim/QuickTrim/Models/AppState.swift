@@ -26,6 +26,54 @@ class AppState: ObservableObject {
     @Published var skimmingEnabled: Bool = false
     @Published var previewModeEnabled: Bool = false
 
+    // Preview mode computed properties
+    var keptRegions: [Region] {
+        regions.filter { !$0.isBinned }.sorted { $0.startTime < $1.startTime }
+    }
+
+    var previewDuration: Double {
+        keptRegions.reduce(0) { $0 + $1.duration }
+    }
+
+    var previewCurrentTime: Double {
+        convertToPreviewTime(currentTime)
+    }
+
+    // Convert source time to preview time (collapsed timeline position)
+    func convertToPreviewTime(_ sourceTime: Double) -> Double {
+        var previewTime: Double = 0
+
+        for region in keptRegions {
+            if sourceTime < region.startTime {
+                // Before this region
+                return previewTime
+            } else if sourceTime >= region.startTime && sourceTime <= region.endTime {
+                // Inside this region
+                return previewTime + (sourceTime - region.startTime)
+            } else {
+                // After this region, accumulate its duration
+                previewTime += region.duration
+            }
+        }
+
+        return previewTime
+    }
+
+    // Convert preview time back to source time
+    func convertFromPreviewTime(_ previewTime: Double) -> Double {
+        var remainingTime = previewTime
+
+        for region in keptRegions {
+            if remainingTime <= region.duration {
+                return region.startTime + remainingTime
+            }
+            remainingTime -= region.duration
+        }
+
+        // If we're past all regions, return end of last region
+        return keptRegions.last?.endTime ?? 0
+    }
+
     // UI state
     @Published var showCloseConfirmation: Bool = false
     @Published var isExporting: Bool = false
@@ -84,7 +132,14 @@ class AppState: ObservableObject {
         // Observe playback time
         let interval = CMTime(seconds: 0.05, preferredTimescale: 600)
         timeObserver = player?.addPeriodicTimeObserver(forInterval: interval, queue: .main) { [weak self] time in
-            self?.currentTime = CMTimeGetSeconds(time)
+            guard let self = self else { return }
+            let newTime = CMTimeGetSeconds(time)
+            self.currentTime = newTime
+
+            // In preview mode, skip binned regions during playback
+            if self.previewModeEnabled && self.isPlaying {
+                self.handlePreviewModePlayback(currentTime: newTime)
+            }
         }
 
         // Observe playing state
@@ -209,6 +264,48 @@ class AppState: ObservableObject {
     func stepSeconds(_ seconds: Double) {
         player?.pause()
         seek(to: currentTime + seconds)
+    }
+
+    func seekToStart() {
+        if previewModeEnabled {
+            // In preview mode, seek to start of first kept region
+            if let firstKept = keptRegions.first {
+                seek(to: firstKept.startTime)
+            }
+        } else {
+            seek(to: 0)
+        }
+    }
+
+    // Handle preview mode playback - skip binned regions
+    private func handlePreviewModePlayback(currentTime: Double) {
+        // Check if we're in a binned region
+        let inBinnedRegion = regions.contains { region in
+            region.isBinned && currentTime >= region.startTime && currentTime < region.endTime
+        }
+
+        if inBinnedRegion {
+            // Find the next kept region after current time
+            if let nextKept = keptRegions.first(where: { $0.startTime >= currentTime }) {
+                // Jump to the start of the next kept region
+                seek(to: nextKept.startTime)
+            } else {
+                // No more kept regions, stop playback
+                player?.pause()
+                // Seek to end of last kept region
+                if let lastKept = keptRegions.last {
+                    seek(to: lastKept.endTime)
+                }
+            }
+        }
+
+        // Check if we've reached the end of the last kept region
+        if let lastKept = keptRegions.last {
+            if currentTime >= lastKept.endTime - 0.05 {
+                player?.pause()
+                seek(to: lastKept.endTime)
+            }
+        }
     }
 
     // MARK: - Timeline Zoom
