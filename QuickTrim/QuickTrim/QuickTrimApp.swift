@@ -127,7 +127,7 @@ struct QuickTrimApp: App {
 
                 Divider()
 
-                Toggle("Enable Scrubbing", isOn: $appState.scrubbingEnabled)
+                Toggle("Enable Skimming", isOn: $appState.skimmingEnabled)
                     .keyboardShortcut("s", modifiers: [.command, .option])
 
                 Toggle("Preview Mode", isOn: $appState.previewModeEnabled)

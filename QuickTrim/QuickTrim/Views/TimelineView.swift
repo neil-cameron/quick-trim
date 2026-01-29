@@ -8,12 +8,9 @@ import AVFoundation
 
 struct TimelineView: View {
     @EnvironmentObject var appState: AppState
-    @State private var thumbnailImages: [Double: NSImage] = [:]
-    @State private var isDragging = false
-    @State private var lastScrubTime: Double = 0
+    @State private var isSkimming = false
 
     private let timecodeHeight: CGFloat = 20
-    private let thumbnailHeight: CGFloat = 60
     private let playheadWidth: CGFloat = 2
 
     var body: some View {
@@ -37,13 +34,13 @@ struct TimelineView: View {
 
                 Spacer()
 
-                // Scrubbing toggle
-                Toggle(isOn: $appState.scrubbingEnabled) {
-                    Label("Scrubbing", systemImage: "waveform")
+                // Skimming toggle
+                Toggle(isOn: $appState.skimmingEnabled) {
+                    Label("Skimming", systemImage: "hand.point.up.left")
                 }
                 .toggleStyle(.button)
                 .controlSize(.small)
-                .help("Enable audio scrubbing (⌘⌥S)")
+                .help("Enable skimming - hover to preview (⌘⌥S)")
 
                 // Preview mode toggle
                 Toggle(isOn: $appState.previewModeEnabled) {
@@ -51,7 +48,7 @@ struct TimelineView: View {
                 }
                 .toggleStyle(.button)
                 .controlSize(.small)
-                .help("Hide binned regions (⌘⌥P)")
+                .help("Show timeline as export preview (⌘⌥P)")
 
                 Divider()
                     .frame(height: 16)
@@ -96,70 +93,11 @@ struct TimelineView: View {
 
             Divider()
 
-            // Timeline content
-            GeometryReader { geometry in
-                let contentWidth = max(geometry.size.width * appState.timelineZoom, geometry.size.width)
-
-                ScrollViewReader { scrollProxy in
-                    ScrollView(.horizontal, showsIndicators: true) {
-                        ZStack(alignment: .topLeading) {
-                            // Background
-                            Rectangle()
-                                .fill(Color(nsColor: .textBackgroundColor))
-
-                            VStack(spacing: 0) {
-                                // Timecode ruler
-                                TimecodeRulerView(
-                                    duration: appState.duration,
-                                    width: contentWidth,
-                                    zoom: appState.timelineZoom
-                                )
-                                .frame(height: timecodeHeight)
-
-                                // Thumbnail track with regions
-                                ThumbnailTrackView(
-                                    width: contentWidth,
-                                    height: geometry.size.height - timecodeHeight - 10
-                                )
-                            }
-
-                            // Playhead
-                            if appState.duration > 0 {
-                                let playheadX = (appState.currentTime / appState.duration) * contentWidth
-
-                                Rectangle()
-                                    .fill(Color.red)
-                                    .frame(width: playheadWidth)
-                                    .offset(x: playheadX - playheadWidth / 2)
-                                    .id("playhead")
-                            }
-                        }
-                        .frame(width: contentWidth, height: geometry.size.height)
-                        .contentShape(Rectangle())
-                        .gesture(
-                            DragGesture(minimumDistance: 0)
-                                .onChanged { value in
-                                    isDragging = true
-                                    let proportion = value.location.x / contentWidth
-                                    let time = max(0, min(proportion * appState.duration, appState.duration))
-
-                                    if appState.scrubbingEnabled {
-                                        // Scrubbing mode: update playhead in real-time
-                                        appState.seek(to: time)
-                                    } else {
-                                        // Non-scrubbing: just track position
-                                        lastScrubTime = time
-                                    }
-                                }
-                                .onEnded { value in
-                                    isDragging = false
-                                    let proportion = value.location.x / contentWidth
-                                    let time = max(0, min(proportion * appState.duration, appState.duration))
-                                    appState.seek(to: time)
-                                }
-                        )
-                    }
-                }
+            // Timeline content - switch between normal and preview mode
+            if appState.previewModeEnabled {
+                PreviewTimelineContent(timecodeHeight: timecodeHeight, playheadWidth: playheadWidth)
+            } else {
+                NormalTimelineContent(timecodeHeight: timecodeHeight, playheadWidth: playheadWidth)
             }
         }
         .background(Color(nsColor: .windowBackgroundColor))
@@ -177,6 +115,194 @@ struct TimelineView: View {
     }
 }
 
+// MARK: - Normal Timeline (full video)
+
+struct NormalTimelineContent: View {
+    @EnvironmentObject var appState: AppState
+    let timecodeHeight: CGFloat
+    let playheadWidth: CGFloat
+
+    var body: some View {
+        GeometryReader { geometry in
+            let contentWidth = max(geometry.size.width * appState.timelineZoom, geometry.size.width)
+
+            ScrollView(.horizontal, showsIndicators: true) {
+                ZStack(alignment: .topLeading) {
+                    Rectangle()
+                        .fill(Color(nsColor: .textBackgroundColor))
+
+                    VStack(spacing: 0) {
+                        TimecodeRulerView(
+                            duration: appState.duration,
+                            width: contentWidth,
+                            zoom: appState.timelineZoom
+                        )
+                        .frame(height: timecodeHeight)
+
+                        NormalThumbnailTrackView(
+                            width: contentWidth,
+                            height: geometry.size.height - timecodeHeight - 10
+                        )
+                    }
+
+                    // Playhead
+                    if appState.duration > 0 {
+                        let playheadX = (appState.currentTime / appState.duration) * contentWidth
+
+                        Rectangle()
+                            .fill(Color.red)
+                            .frame(width: playheadWidth)
+                            .offset(x: playheadX - playheadWidth / 2)
+                    }
+                }
+                .frame(width: contentWidth, height: geometry.size.height)
+                .contentShape(Rectangle())
+                .gesture(
+                    DragGesture(minimumDistance: 0)
+                        .onChanged { value in
+                            let time = timeFromPosition(value.location.x, width: contentWidth)
+                            appState.seek(to: time)
+                        }
+                )
+                .onContinuousHover { phase in
+                    guard appState.skimmingEnabled else { return }
+                    switch phase {
+                    case .active(let location):
+                        let time = timeFromPosition(location.x, width: contentWidth)
+                        appState.seek(to: time)
+                    case .ended:
+                        break
+                    }
+                }
+            }
+        }
+    }
+
+    private func timeFromPosition(_ x: CGFloat, width: CGFloat) -> Double {
+        let proportion = x / width
+        return max(0, min(proportion * appState.duration, appState.duration))
+    }
+}
+
+// MARK: - Preview Timeline (collapsed to kept regions only)
+
+struct PreviewTimelineContent: View {
+    @EnvironmentObject var appState: AppState
+    let timecodeHeight: CGFloat
+    let playheadWidth: CGFloat
+
+    private var keptRegions: [Region] {
+        appState.regions.filter { !$0.isBinned }
+    }
+
+    private var previewDuration: Double {
+        keptRegions.reduce(0) { $0 + $1.duration }
+    }
+
+    var body: some View {
+        GeometryReader { geometry in
+            let contentWidth = max(geometry.size.width * appState.timelineZoom, geometry.size.width)
+
+            ScrollView(.horizontal, showsIndicators: true) {
+                ZStack(alignment: .topLeading) {
+                    Rectangle()
+                        .fill(Color(nsColor: .textBackgroundColor))
+
+                    VStack(spacing: 0) {
+                        // Preview timecode ruler (shows collapsed time)
+                        TimecodeRulerView(
+                            duration: previewDuration,
+                            width: contentWidth,
+                            zoom: appState.timelineZoom
+                        )
+                        .frame(height: timecodeHeight)
+
+                        // Preview thumbnail track
+                        PreviewThumbnailTrackView(
+                            width: contentWidth,
+                            height: geometry.size.height - timecodeHeight - 10
+                        )
+                    }
+
+                    // Playhead in preview coordinates
+                    if previewDuration > 0 {
+                        let previewTime = convertToPreviewTime(appState.currentTime)
+                        let playheadX = (previewTime / previewDuration) * contentWidth
+
+                        Rectangle()
+                            .fill(Color.red)
+                            .frame(width: playheadWidth)
+                            .offset(x: playheadX - playheadWidth / 2)
+                    }
+                }
+                .frame(width: contentWidth, height: geometry.size.height)
+                .contentShape(Rectangle())
+                .gesture(
+                    DragGesture(minimumDistance: 0)
+                        .onChanged { value in
+                            let previewTime = previewTimeFromPosition(value.location.x, width: contentWidth)
+                            let sourceTime = convertFromPreviewTime(previewTime)
+                            appState.seek(to: sourceTime)
+                        }
+                )
+                .onContinuousHover { phase in
+                    guard appState.skimmingEnabled else { return }
+                    switch phase {
+                    case .active(let location):
+                        let previewTime = previewTimeFromPosition(location.x, width: contentWidth)
+                        let sourceTime = convertFromPreviewTime(previewTime)
+                        appState.seek(to: sourceTime)
+                    case .ended:
+                        break
+                    }
+                }
+            }
+        }
+    }
+
+    private func previewTimeFromPosition(_ x: CGFloat, width: CGFloat) -> Double {
+        let proportion = x / width
+        return max(0, min(proportion * previewDuration, previewDuration))
+    }
+
+    // Convert source time to preview time (collapsed timeline position)
+    private func convertToPreviewTime(_ sourceTime: Double) -> Double {
+        var previewTime: Double = 0
+
+        for region in keptRegions {
+            if sourceTime < region.startTime {
+                // Before this region
+                return previewTime
+            } else if sourceTime >= region.startTime && sourceTime <= region.endTime {
+                // Inside this region
+                return previewTime + (sourceTime - region.startTime)
+            } else {
+                // After this region, accumulate its duration
+                previewTime += region.duration
+            }
+        }
+
+        return previewTime
+    }
+
+    // Convert preview time back to source time
+    private func convertFromPreviewTime(_ previewTime: Double) -> Double {
+        var remainingTime = previewTime
+
+        for region in keptRegions {
+            if remainingTime <= region.duration {
+                return region.startTime + remainingTime
+            }
+            remainingTime -= region.duration
+        }
+
+        // If we're past all regions, return end of last region
+        return keptRegions.last?.endTime ?? 0
+    }
+}
+
+// MARK: - Timecode Ruler
+
 struct TimecodeRulerView: View {
     let duration: Double
     let width: CGFloat
@@ -188,7 +314,6 @@ struct TimecodeRulerView: View {
 
             let pixelsPerSecond = width / duration
 
-            // Determine tick interval based on zoom
             let majorInterval: Double
             let minorTicksPerMajor: Int
 
@@ -208,7 +333,6 @@ struct TimecodeRulerView: View {
 
             let minorInterval = majorInterval / Double(minorTicksPerMajor)
 
-            // Draw minor ticks
             var time: Double = 0
             while time <= duration {
                 let x = (time / duration) * width
@@ -222,7 +346,6 @@ struct TimecodeRulerView: View {
 
                 context.stroke(tickPath, with: .color(.secondary.opacity(0.5)), lineWidth: 1)
 
-                // Draw time label for major ticks
                 if isMajor {
                     let label = formatTimeLabel(time)
                     let text = Text(label)
@@ -251,7 +374,9 @@ struct TimecodeRulerView: View {
     }
 }
 
-struct ThumbnailTrackView: View {
+// MARK: - Normal Thumbnail Track
+
+struct NormalThumbnailTrackView: View {
     @EnvironmentObject var appState: AppState
     let width: CGFloat
     let height: CGFloat
@@ -260,31 +385,64 @@ struct ThumbnailTrackView: View {
         ZStack(alignment: .leading) {
             // Region backgrounds
             ForEach(appState.regions) { region in
-                if !appState.previewModeEnabled || !region.isBinned {
-                    RegionBackground(
-                        region: region,
-                        totalDuration: appState.duration,
-                        totalWidth: width,
-                        height: height,
-                        previewMode: appState.previewModeEnabled
-                    )
-                }
+                RegionBackground(
+                    region: region,
+                    totalDuration: appState.duration,
+                    totalWidth: width,
+                    height: height
+                )
             }
 
-            // Thumbnails (show all in normal mode, filter in preview mode)
-            if appState.previewModeEnabled {
-                PreviewThumbnailStripView(width: width, height: height)
-            } else {
-                ThumbnailStripView(width: width, height: height)
-            }
+            // Thumbnails
+            ThumbnailStripView(width: width, height: height)
 
-            // Region dividers (hide in preview mode for binned regions)
+            // Region dividers
             ForEach(appState.regions.dropLast()) { region in
-                if !appState.previewModeEnabled || !region.isBinned {
-                    let x = (region.endTime / appState.duration) * width
+                let x = (region.endTime / appState.duration) * width
+
+                Rectangle()
+                    .fill(Color.yellow)
+                    .frame(width: 2)
+                    .offset(x: x - 1)
+            }
+        }
+        .frame(width: width, height: height)
+    }
+}
+
+// MARK: - Preview Thumbnail Track (collapsed)
+
+struct PreviewThumbnailTrackView: View {
+    @EnvironmentObject var appState: AppState
+    let width: CGFloat
+    let height: CGFloat
+
+    private var keptRegions: [Region] {
+        appState.regions.filter { !$0.isBinned }
+    }
+
+    private var previewDuration: Double {
+        keptRegions.reduce(0) { $0 + $1.duration }
+    }
+
+    var body: some View {
+        ZStack(alignment: .leading) {
+            // Thumbnails for each kept region, positioned contiguously
+            PreviewThumbnailStripView(
+                keptRegions: keptRegions,
+                previewDuration: previewDuration,
+                width: width,
+                height: height
+            )
+
+            // Region dividers between kept regions
+            if keptRegions.count > 1 {
+                ForEach(Array(keptRegions.dropLast().enumerated()), id: \.element.id) { index, _ in
+                    let previewTime = keptRegions.prefix(index + 1).reduce(0) { $0 + $1.duration }
+                    let x = (previewTime / previewDuration) * width
 
                     Rectangle()
-                        .fill(Color.yellow)
+                        .fill(Color.green)
                         .frame(width: 2)
                         .offset(x: x - 1)
                 }
@@ -294,25 +452,25 @@ struct ThumbnailTrackView: View {
     }
 }
 
+// MARK: - Region Background
+
 struct RegionBackground: View {
     let region: Region
     let totalDuration: Double
     let totalWidth: CGFloat
     let height: CGFloat
-    var previewMode: Bool = false
 
     var body: some View {
         let startX = (region.startTime / totalDuration) * totalWidth
         let regionWidth = (region.duration / totalDuration) * totalWidth
 
         Rectangle()
-            .fill(region.isBinned && !previewMode ? Color.red.opacity(0.3) : Color.clear)
+            .fill(region.isBinned ? Color.red.opacity(0.3) : Color.clear)
             .frame(width: regionWidth, height: height)
             .offset(x: startX)
             .overlay(
                 Group {
-                    if region.isBinned && !previewMode {
-                        // Strikethrough pattern for binned regions
+                    if region.isBinned {
                         StrikethroughPattern()
                             .frame(width: regionWidth, height: height)
                             .offset(x: startX)
@@ -342,9 +500,13 @@ struct StrikethroughPattern: View {
     }
 }
 
+// MARK: - Thumbnail Strip (Normal mode)
+
 struct ThumbnailStripView: View {
     @EnvironmentObject var appState: AppState
     @State private var thumbnails: [(time: Double, image: NSImage)] = []
+    @State private var lastGeneratedURL: URL?
+    @State private var lastGeneratedWidth: CGFloat = 0
 
     let width: CGFloat
     let height: CGFloat
@@ -362,22 +524,36 @@ struct ThumbnailStripView: View {
             }
         }
         .onAppear {
-            generateThumbnails()
+            generateThumbnailsIfNeeded()
         }
         .onChange(of: appState.videoURL) { _, _ in
-            generateThumbnails()
+            generateThumbnailsIfNeeded()
         }
         .onChange(of: width) { _, _ in
-            generateThumbnails()
+            generateThumbnailsIfNeeded()
         }
     }
 
-    private func generateThumbnails() {
+    private func generateThumbnailsIfNeeded() {
+        // Only regenerate if URL or width changed significantly
         guard let url = appState.videoURL else {
             thumbnails = []
+            lastGeneratedURL = nil
             return
         }
 
+        let widthChanged = abs(width - lastGeneratedWidth) > 50
+        let urlChanged = url != lastGeneratedURL
+
+        guard urlChanged || widthChanged else { return }
+
+        lastGeneratedURL = url
+        lastGeneratedWidth = width
+
+        generateThumbnails(url: url)
+    }
+
+    private func generateThumbnails(url: URL) {
         let asset = AVAsset(url: url)
         let imageGenerator = AVAssetImageGenerator(asset: asset)
         imageGenerator.appliesPreferredTrackTransform = true
@@ -400,7 +576,6 @@ struct ThumbnailStripView: View {
                     let nsImage = NSImage(cgImage: cgImage, size: NSSize(width: thumbnailWidth, height: height))
                     newThumbnails.append((time: time, image: nsImage))
                 } catch {
-                    // Create placeholder for failed thumbnails
                     let placeholder = NSImage(size: NSSize(width: thumbnailWidth, height: height))
                     newThumbnails.append((time: time, image: placeholder))
                 }
@@ -413,57 +588,62 @@ struct ThumbnailStripView: View {
     }
 }
 
+// MARK: - Preview Thumbnail Strip (collapsed mode)
+
 struct PreviewThumbnailStripView: View {
     @EnvironmentObject var appState: AppState
-    @State private var thumbnails: [(time: Double, image: NSImage, regionId: UUID)] = []
+    @State private var thumbnails: [(time: Double, image: NSImage)] = []
+    @State private var lastKeptRegionIds: [UUID] = []
+    @State private var lastGeneratedWidth: CGFloat = 0
 
+    let keptRegions: [Region]
+    let previewDuration: Double
     let width: CGFloat
     let height: CGFloat
 
     private let thumbnailWidth: CGFloat = 80
 
-    private var keptRegions: [Region] {
-        appState.regions.filter { !$0.isBinned }
-    }
-
-    private var totalKeptDuration: Double {
-        keptRegions.reduce(0) { $0 + $1.duration }
-    }
-
     var body: some View {
         HStack(spacing: 0) {
-            ForEach(keptRegions) { region in
-                let regionWidth = (region.duration / appState.duration) * width
-
-                ForEach(thumbnailsForRegion(region), id: \.time) { thumbnail in
-                    Image(nsImage: thumbnail.image)
-                        .resizable()
-                        .aspectRatio(contentMode: .fill)
-                        .frame(width: thumbnailWidth, height: height)
-                        .clipped()
-                }
+            ForEach(thumbnails, id: \.time) { thumbnail in
+                Image(nsImage: thumbnail.image)
+                    .resizable()
+                    .aspectRatio(contentMode: .fill)
+                    .frame(width: thumbnailWidth, height: height)
+                    .clipped()
             }
         }
         .onAppear {
-            generateThumbnails()
+            generateThumbnailsIfNeeded()
         }
-        .onChange(of: appState.videoURL) { _, _ in
-            generateThumbnails()
-        }
-        .onChange(of: appState.regions) { _, _ in
-            generateThumbnails()
+        .onChange(of: keptRegions.map { $0.id }) { _, _ in
+            generateThumbnailsIfNeeded()
         }
         .onChange(of: width) { _, _ in
-            generateThumbnails()
+            generateThumbnailsIfNeeded()
         }
     }
 
-    private func thumbnailsForRegion(_ region: Region) -> [(time: Double, image: NSImage)] {
-        thumbnails.filter { $0.regionId == region.id }.map { ($0.time, $0.image) }
+    private func generateThumbnailsIfNeeded() {
+        guard let url = appState.videoURL else {
+            thumbnails = []
+            return
+        }
+
+        let currentIds = keptRegions.map { $0.id }
+        let idsChanged = currentIds != lastKeptRegionIds
+        let widthChanged = abs(width - lastGeneratedWidth) > 50
+
+        guard idsChanged || widthChanged else { return }
+
+        lastKeptRegionIds = currentIds
+        lastGeneratedWidth = width
+
+        generateThumbnails(url: url)
     }
 
-    private func generateThumbnails() {
-        guard let url = appState.videoURL else {
+    private func generateThumbnails(url: URL) {
+        guard previewDuration > 0 else {
             thumbnails = []
             return
         }
@@ -473,26 +653,27 @@ struct PreviewThumbnailStripView: View {
         imageGenerator.appliesPreferredTrackTransform = true
         imageGenerator.maximumSize = CGSize(width: thumbnailWidth * 2, height: height * 2)
 
+        let numberOfThumbnails = Int(ceil(width / thumbnailWidth))
+        guard numberOfThumbnails > 0 else { return }
+
+        let interval = previewDuration / Double(numberOfThumbnails)
+
         Task {
-            var newThumbnails: [(time: Double, image: NSImage, regionId: UUID)] = []
+            var newThumbnails: [(time: Double, image: NSImage)] = []
 
-            for region in keptRegions {
-                let regionWidth = (region.duration / appState.duration) * width
-                let numberOfThumbnails = max(1, Int(ceil(regionWidth / thumbnailWidth)))
-                let interval = region.duration / Double(numberOfThumbnails)
+            for i in 0..<numberOfThumbnails {
+                // Calculate preview time, then convert to source time
+                let previewTime = Double(i) * interval + interval / 2
+                let sourceTime = convertFromPreviewTime(previewTime)
+                let cmTime = CMTime(seconds: sourceTime, preferredTimescale: 600)
 
-                for i in 0..<numberOfThumbnails {
-                    let time = region.startTime + Double(i) * interval + interval / 2
-                    let cmTime = CMTime(seconds: time, preferredTimescale: 600)
-
-                    do {
-                        let (cgImage, _) = try await imageGenerator.image(at: cmTime)
-                        let nsImage = NSImage(cgImage: cgImage, size: NSSize(width: thumbnailWidth, height: height))
-                        newThumbnails.append((time: time, image: nsImage, regionId: region.id))
-                    } catch {
-                        let placeholder = NSImage(size: NSSize(width: thumbnailWidth, height: height))
-                        newThumbnails.append((time: time, image: placeholder, regionId: region.id))
-                    }
+                do {
+                    let (cgImage, _) = try await imageGenerator.image(at: cmTime)
+                    let nsImage = NSImage(cgImage: cgImage, size: NSSize(width: thumbnailWidth, height: height))
+                    newThumbnails.append((time: previewTime, image: nsImage))
+                } catch {
+                    let placeholder = NSImage(size: NSSize(width: thumbnailWidth, height: height))
+                    newThumbnails.append((time: previewTime, image: placeholder))
                 }
             }
 
@@ -500,6 +681,19 @@ struct PreviewThumbnailStripView: View {
                 self.thumbnails = newThumbnails
             }
         }
+    }
+
+    private func convertFromPreviewTime(_ previewTime: Double) -> Double {
+        var remainingTime = previewTime
+
+        for region in keptRegions {
+            if remainingTime <= region.duration {
+                return region.startTime + remainingTime
+            }
+            remainingTime -= region.duration
+        }
+
+        return keptRegions.last?.endTime ?? 0
     }
 }
 
