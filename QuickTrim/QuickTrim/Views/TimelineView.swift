@@ -395,29 +395,48 @@ struct NormalThumbnailTrackView: View {
     let width: CGFloat
     let height: CGFloat
 
+    private let statusBarHeight: CGFloat = 4
+
     var body: some View {
         ZStack(alignment: .leading) {
-            // Region backgrounds
+            // Region backgrounds (red overlay for binned)
             ForEach(appState.regions) { region in
                 RegionBackground(
                     region: region,
                     totalDuration: appState.duration,
                     totalWidth: width,
-                    height: height
+                    height: height - statusBarHeight
                 )
             }
 
             // Thumbnails
-            ThumbnailStripView(width: width, height: height)
+            ThumbnailStripView(width: width, height: height - statusBarHeight)
 
-            // Region dividers
-            ForEach(appState.regions.dropLast()) { region in
-                let x = (region.endTime / appState.duration) * width
+            // Region status bars at bottom (green for kept, red for binned)
+            VStack(spacing: 0) {
+                Spacer()
+                HStack(spacing: 0) {
+                    ForEach(appState.regions) { region in
+                        let regionWidth = (region.duration / appState.duration) * width
+                        Rectangle()
+                            .fill(region.isBinned ? Color.red : Color.green)
+                            .frame(width: regionWidth, height: statusBarHeight)
+                    }
+                }
+            }
 
-                Rectangle()
-                    .fill(Color.yellow)
-                    .frame(width: 2)
-                    .offset(x: x - 1)
+            // Region dividers (yellow vertical lines at trim points)
+            if appState.regions.count > 1 {
+                ForEach(appState.regions.dropLast()) { region in
+                    if appState.duration > 0 {
+                        let x = (region.endTime / appState.duration) * width
+
+                        Rectangle()
+                            .fill(Color.yellow)
+                            .frame(width: 2, height: height)
+                            .offset(x: x - 1)
+                    }
+                }
             }
         }
         .frame(width: width, height: height)
@@ -430,6 +449,8 @@ struct PreviewThumbnailTrackView: View {
     @EnvironmentObject var appState: AppState
     let width: CGFloat
     let height: CGFloat
+
+    private let statusBarHeight: CGFloat = 4
 
     private var keptRegions: [Region] {
         appState.regions.filter { !$0.isBinned }
@@ -446,18 +467,26 @@ struct PreviewThumbnailTrackView: View {
                 keptRegions: keptRegions,
                 previewDuration: previewDuration,
                 width: width,
-                height: height
+                height: height - statusBarHeight
             )
 
-            // Region dividers between kept regions
-            if keptRegions.count > 1 {
+            // Green status bar at bottom (all kept in preview mode)
+            VStack(spacing: 0) {
+                Spacer()
+                Rectangle()
+                    .fill(Color.green)
+                    .frame(width: width, height: statusBarHeight)
+            }
+
+            // Region dividers between kept regions (green vertical lines)
+            if keptRegions.count > 1 && previewDuration > 0 {
                 ForEach(Array(keptRegions.dropLast().enumerated()), id: \.element.id) { index, _ in
                     let previewTime = keptRegions.prefix(index + 1).reduce(0) { $0 + $1.duration }
                     let x = (previewTime / previewDuration) * width
 
                     Rectangle()
-                        .fill(Color.green)
-                        .frame(width: 2)
+                        .fill(Color.green.opacity(0.7))
+                        .frame(width: 2, height: height)
                         .offset(x: x - 1)
                 }
             }
@@ -541,6 +570,10 @@ struct ThumbnailStripView: View {
             generateThumbnailsIfNeeded()
         }
         .onChange(of: appState.videoURL) { _, _ in
+            generateThumbnailsIfNeeded()
+        }
+        .onChange(of: appState.duration) { _, _ in
+            // Regenerate when duration becomes available (async load)
             generateThumbnailsIfNeeded()
         }
         .onChange(of: width) { _, _ in

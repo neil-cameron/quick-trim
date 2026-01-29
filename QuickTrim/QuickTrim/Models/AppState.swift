@@ -23,7 +23,7 @@ class AppState: ObservableObject {
 
     // Timeline
     @Published var timelineZoom: Double = 1.0
-    @Published var skimmingEnabled: Bool = false
+    @Published var skimmingEnabled: Bool = true  // Enabled by default
     @Published var previewModeEnabled: Bool = false
 
     // Preview mode computed properties
