@@ -17,37 +17,19 @@ struct TimelineView: View {
         VStack(spacing: 0) {
             // Zoom controls and time display
             HStack {
-                // Time display - always show both source and trimmed times
-                VStack(alignment: .leading, spacing: 2) {
-                    // Source time (full video)
-                    HStack(spacing: 4) {
-                        Image(systemName: "film")
-                            .font(.system(size: 9))
-                            .foregroundColor(.secondary)
-                        Text(formatTimecode(appState.currentTime))
-                            .font(.system(.caption, design: .monospaced))
-                            .foregroundColor(appState.previewModeEnabled ? .secondary : .primary)
-                        Text("/")
-                            .foregroundColor(.secondary)
-                        Text(formatTimecode(appState.duration))
-                            .font(.system(.caption2, design: .monospaced))
-                            .foregroundColor(.secondary)
-                    }
-
-                    // Trimmed time (preview/export)
-                    HStack(spacing: 4) {
-                        Image(systemName: "scissors")
-                            .font(.system(size: 9))
-                            .foregroundColor(.green)
-                        Text(formatTimecode(appState.previewCurrentTime))
-                            .font(.system(.caption, design: .monospaced))
-                            .foregroundColor(appState.previewModeEnabled ? .primary : .green)
-                        Text("/")
-                            .foregroundColor(.secondary)
-                        Text(formatTimecode(appState.previewDuration))
-                            .font(.system(.caption2, design: .monospaced))
-                            .foregroundColor(.green.opacity(0.7))
-                    }
+                // Trimmed time display (preview/export duration)
+                HStack(spacing: 4) {
+                    Image(systemName: "scissors")
+                        .font(.system(size: 10))
+                        .foregroundColor(.green)
+                    Text(formatTimecode(appState.previewCurrentTime))
+                        .font(.system(.caption, design: .monospaced))
+                        .foregroundColor(.green)
+                    Text("/")
+                        .foregroundColor(.secondary)
+                    Text(formatTimecode(appState.previewDuration))
+                        .font(.system(.caption, design: .monospaced))
+                        .foregroundColor(.green.opacity(0.7))
                 }
                 .padding(.horizontal, 8)
                 .padding(.vertical, 4)
@@ -88,6 +70,7 @@ struct TimelineView: View {
                     Text("\(Int(appState.timelineZoom * 100))%")
                         .font(.caption)
                         .frame(width: 40)
+                        .contentShape(Rectangle())
                         .onTapGesture(count: 2) {
                             appState.timelineZoom = 1.0
                         }
@@ -99,11 +82,8 @@ struct TimelineView: View {
                     .buttonStyle(.plain)
                     .help("Zoom in (⌘+)")
 
-                    Slider(value: $appState.timelineZoom, in: 0.5...10.0)
+                    ZoomSlider(zoom: $appState.timelineZoom)
                         .frame(width: 80)
-                        .onTapGesture(count: 2) {
-                            appState.timelineZoom = 1.0
-                        }
                 }
 
                 Divider()
@@ -146,6 +126,29 @@ struct TimelineView: View {
     }
 }
 
+// MARK: - Zoom Slider with double-click reset
+
+struct ZoomSlider: View {
+    @Binding var zoom: Double
+
+    var body: some View {
+        Slider(value: $zoom, in: 0.5...10.0)
+            .gesture(
+                TapGesture(count: 2)
+                    .onEnded {
+                        zoom = 1.0
+                    }
+            )
+            .simultaneousGesture(
+                TapGesture(count: 2)
+                    .onEnded {
+                        zoom = 1.0
+                    }
+            )
+            .help("Double-click to reset to 100%")
+    }
+}
+
 // MARK: - Normal Timeline (full video)
 
 struct NormalTimelineContent: View {
@@ -176,14 +179,14 @@ struct NormalTimelineContent: View {
                         )
                     }
 
-                    // Playhead
+                    // Playhead - positioned identically to yellow trim dividers
                     if appState.duration > 0 {
                         let playheadX = (appState.currentTime / appState.duration) * contentWidth
 
                         Rectangle()
                             .fill(Color.red)
-                            .frame(width: playheadWidth)
-                            .offset(x: playheadX - playheadWidth / 2)
+                            .frame(width: 2, height: geometry.size.height)
+                            .offset(x: playheadX - 1)
                     }
                 }
                 .frame(width: contentWidth, height: geometry.size.height)
@@ -255,15 +258,15 @@ struct PreviewTimelineContent: View {
                         )
                     }
 
-                    // Playhead in preview coordinates
+                    // Playhead in preview coordinates - positioned identically to green dividers
                     if previewDuration > 0 {
                         let previewTime = convertToPreviewTime(appState.currentTime)
                         let playheadX = (previewTime / previewDuration) * contentWidth
 
                         Rectangle()
                             .fill(Color.red)
-                            .frame(width: playheadWidth)
-                            .offset(x: playheadX - playheadWidth / 2)
+                            .frame(width: 2, height: geometry.size.height)
+                            .offset(x: playheadX - 1)
                     }
                 }
                 .frame(width: contentWidth, height: geometry.size.height)

@@ -8,7 +8,7 @@ import AVKit
 
 struct ContentView: View {
     @EnvironmentObject var appState: AppState
-    @State private var timelineHeight: CGFloat = 120
+    @State private var timelineHeight: CGFloat = 156
 
     private let regionsPaneWidth: CGFloat = 280
 
