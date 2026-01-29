@@ -13,37 +13,47 @@ struct TimelineView: View {
     private let timecodeHeight: CGFloat = 20
     private let playheadWidth: CGFloat = 2
 
-    // Display time based on preview mode
-    private var displayCurrentTime: Double {
-        appState.previewModeEnabled ? appState.previewCurrentTime : appState.currentTime
-    }
-
-    private var displayDuration: Double {
-        appState.previewModeEnabled ? appState.previewDuration : appState.duration
-    }
-
     var body: some View {
         VStack(spacing: 0) {
             // Zoom controls and time display
             HStack {
-                // Current time readout
-                HStack(spacing: 4) {
-                    Image(systemName: appState.previewModeEnabled ? "eye" : "timer")
-                        .foregroundColor(appState.previewModeEnabled ? .accentColor : .secondary)
-                    Text(formatTimecode(displayCurrentTime))
-                        .font(.system(.caption, design: .monospaced))
-                        .foregroundColor(.primary)
-                    Text("/")
-                        .foregroundColor(.secondary)
-                    Text(formatTimecode(displayDuration))
-                        .font(.system(.caption, design: .monospaced))
-                        .foregroundColor(.secondary)
+                // Time display - always show both source and trimmed times
+                VStack(alignment: .leading, spacing: 2) {
+                    // Source time (full video)
+                    HStack(spacing: 4) {
+                        Image(systemName: "film")
+                            .font(.system(size: 9))
+                            .foregroundColor(.secondary)
+                        Text(formatTimecode(appState.currentTime))
+                            .font(.system(.caption, design: .monospaced))
+                            .foregroundColor(appState.previewModeEnabled ? .secondary : .primary)
+                        Text("/")
+                            .foregroundColor(.secondary)
+                        Text(formatTimecode(appState.duration))
+                            .font(.system(.caption2, design: .monospaced))
+                            .foregroundColor(.secondary)
+                    }
+
+                    // Trimmed time (preview/export)
+                    HStack(spacing: 4) {
+                        Image(systemName: "scissors")
+                            .font(.system(size: 9))
+                            .foregroundColor(.green)
+                        Text(formatTimecode(appState.previewCurrentTime))
+                            .font(.system(.caption, design: .monospaced))
+                            .foregroundColor(appState.previewModeEnabled ? .primary : .green)
+                        Text("/")
+                            .foregroundColor(.secondary)
+                        Text(formatTimecode(appState.previewDuration))
+                            .font(.system(.caption2, design: .monospaced))
+                            .foregroundColor(.green.opacity(0.7))
+                    }
                 }
                 .padding(.horizontal, 8)
                 .padding(.vertical, 4)
                 .background(
                     RoundedRectangle(cornerRadius: 4)
-                        .fill(appState.previewModeEnabled ? Color.accentColor.opacity(0.1) : Color(nsColor: .controlBackgroundColor))
+                        .fill(Color(nsColor: .controlBackgroundColor))
                 )
 
                 Spacer()
@@ -78,6 +88,10 @@ struct TimelineView: View {
                     Text("\(Int(appState.timelineZoom * 100))%")
                         .font(.caption)
                         .frame(width: 40)
+                        .onTapGesture(count: 2) {
+                            appState.timelineZoom = 1.0
+                        }
+                        .help("Double-click to reset to 100%")
 
                     Button(action: { appState.zoomIn() }) {
                         Image(systemName: "plus.magnifyingglass")
@@ -87,6 +101,9 @@ struct TimelineView: View {
 
                     Slider(value: $appState.timelineZoom, in: 0.5...10.0)
                         .frame(width: 80)
+                        .onTapGesture(count: 2) {
+                            appState.timelineZoom = 1.0
+                        }
                 }
 
                 Divider()
@@ -550,6 +567,7 @@ struct ThumbnailStripView: View {
     @State private var thumbnails: [(time: Double, image: NSImage)] = []
     @State private var lastGeneratedURL: URL?
     @State private var lastGeneratedWidth: CGFloat = 0
+    @State private var lastGeneratedDuration: Double = 0
 
     let width: CGFloat
     let height: CGFloat
@@ -570,11 +588,17 @@ struct ThumbnailStripView: View {
             generateThumbnailsIfNeeded()
         }
         .onChange(of: appState.videoURL) { _, _ in
+            // Reset cache on new video
+            lastGeneratedURL = nil
+            lastGeneratedDuration = 0
+            thumbnails = []
             generateThumbnailsIfNeeded()
         }
-        .onChange(of: appState.duration) { _, _ in
+        .onChange(of: appState.duration) { _, newDuration in
             // Regenerate when duration becomes available (async load)
-            generateThumbnailsIfNeeded()
+            if newDuration > 0 && lastGeneratedDuration == 0 {
+                generateThumbnailsIfNeeded()
+            }
         }
         .onChange(of: width) { _, _ in
             generateThumbnailsIfNeeded()
@@ -582,20 +606,20 @@ struct ThumbnailStripView: View {
     }
 
     private func generateThumbnailsIfNeeded() {
-        // Only regenerate if URL or width changed significantly
-        guard let url = appState.videoURL else {
-            thumbnails = []
-            lastGeneratedURL = nil
+        // Need valid URL and duration
+        guard let url = appState.videoURL, appState.duration > 0 else {
             return
         }
 
         let widthChanged = abs(width - lastGeneratedWidth) > 50
         let urlChanged = url != lastGeneratedURL
+        let durationChanged = lastGeneratedDuration == 0 && appState.duration > 0
 
-        guard urlChanged || widthChanged else { return }
+        guard urlChanged || widthChanged || durationChanged else { return }
 
         lastGeneratedURL = url
         lastGeneratedWidth = width
+        lastGeneratedDuration = appState.duration
 
         generateThumbnails(url: url)
     }

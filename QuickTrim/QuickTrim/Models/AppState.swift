@@ -279,6 +279,9 @@ class AppState: ObservableObject {
 
     // Handle preview mode playback - skip binned regions
     private func handlePreviewModePlayback(currentTime: Double) {
+        // Only handle during actual playback (not when paused)
+        guard isPlaying else { return }
+
         // Check if we're in a binned region
         let inBinnedRegion = regions.contains { region in
             region.isBinned && currentTime >= region.startTime && currentTime < region.endTime
@@ -292,18 +295,14 @@ class AppState: ObservableObject {
             } else {
                 // No more kept regions, stop playback
                 player?.pause()
-                // Seek to end of last kept region
-                if let lastKept = keptRegions.last {
-                    seek(to: lastKept.endTime)
-                }
             }
+            return
         }
 
         // Check if we've reached the end of the last kept region
         if let lastKept = keptRegions.last {
-            if currentTime >= lastKept.endTime - 0.05 {
+            if currentTime >= lastKept.endTime - 0.02 {
                 player?.pause()
-                seek(to: lastKept.endTime)
             }
         }
     }

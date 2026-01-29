@@ -179,8 +179,8 @@ struct RegionRowView: View {
         )
         .contentShape(Rectangle())
         .onTapGesture {
-            // Seek to middle of region when clicked
-            appState.seek(to: region.middleTime)
+            // Seek to start of region when clicked
+            appState.seek(to: region.startTime)
         }
     }
 
