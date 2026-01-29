@@ -179,14 +179,25 @@ struct NormalTimelineContent: View {
                         )
                     }
 
-                    // Playhead - positioned identically to yellow trim dividers
+                    // Region dividers (yellow vertical lines at trim points) - drawn at same level as playhead
+                    if appState.regions.count > 1 && appState.duration > 0 {
+                        ForEach(appState.regions.dropLast()) { region in
+                            let x = (region.endTime / appState.duration) * contentWidth
+                            Rectangle()
+                                .fill(Color.yellow)
+                                .frame(width: 2, height: geometry.size.height)
+                                .position(x: x, y: geometry.size.height / 2)
+                        }
+                    }
+
+                    // Playhead
                     if appState.duration > 0 {
                         let playheadX = (appState.currentTime / appState.duration) * contentWidth
 
                         Rectangle()
                             .fill(Color.red)
                             .frame(width: 2, height: geometry.size.height)
-                            .offset(x: playheadX - 1)
+                            .position(x: playheadX, y: geometry.size.height / 2)
                     }
                 }
                 .frame(width: contentWidth, height: geometry.size.height)
@@ -258,7 +269,19 @@ struct PreviewTimelineContent: View {
                         )
                     }
 
-                    // Playhead in preview coordinates - positioned identically to green dividers
+                    // Region dividers between kept regions (green vertical lines) - drawn at same level as playhead
+                    if keptRegions.count > 1 && previewDuration > 0 {
+                        ForEach(Array(keptRegions.dropLast().enumerated()), id: \.element.id) { index, _ in
+                            let previewTime = keptRegions.prefix(index + 1).reduce(0) { $0 + $1.duration }
+                            let x = (previewTime / previewDuration) * contentWidth
+                            Rectangle()
+                                .fill(Color.green.opacity(0.7))
+                                .frame(width: 2, height: geometry.size.height)
+                                .position(x: x, y: geometry.size.height / 2)
+                        }
+                    }
+
+                    // Playhead in preview coordinates
                     if previewDuration > 0 {
                         let previewTime = convertToPreviewTime(appState.currentTime)
                         let playheadX = (previewTime / previewDuration) * contentWidth
@@ -266,7 +289,7 @@ struct PreviewTimelineContent: View {
                         Rectangle()
                             .fill(Color.red)
                             .frame(width: 2, height: geometry.size.height)
-                            .offset(x: playheadX - 1)
+                            .position(x: playheadX, y: geometry.size.height / 2)
                     }
                 }
                 .frame(width: contentWidth, height: geometry.size.height)
@@ -444,20 +467,7 @@ struct NormalThumbnailTrackView: View {
                     }
                 }
             }
-
-            // Region dividers (yellow vertical lines at trim points)
-            if appState.regions.count > 1 {
-                ForEach(appState.regions.dropLast()) { region in
-                    if appState.duration > 0 {
-                        let x = (region.endTime / appState.duration) * width
-
-                        Rectangle()
-                            .fill(Color.yellow)
-                            .frame(width: 2, height: height)
-                            .offset(x: x - 1)
-                    }
-                }
-            }
+            // Note: Yellow dividers are now drawn at NormalTimelineContent level for proper alignment with playhead
         }
         .frame(width: width, height: height)
     }
@@ -497,19 +507,7 @@ struct PreviewThumbnailTrackView: View {
                     .fill(Color.green)
                     .frame(width: width, height: statusBarHeight)
             }
-
-            // Region dividers between kept regions (green vertical lines)
-            if keptRegions.count > 1 && previewDuration > 0 {
-                ForEach(Array(keptRegions.dropLast().enumerated()), id: \.element.id) { index, _ in
-                    let previewTime = keptRegions.prefix(index + 1).reduce(0) { $0 + $1.duration }
-                    let x = (previewTime / previewDuration) * width
-
-                    Rectangle()
-                        .fill(Color.green.opacity(0.7))
-                        .frame(width: 2, height: height)
-                        .offset(x: x - 1)
-                }
-            }
+            // Note: Green dividers are now drawn at PreviewTimelineContent level for proper alignment with playhead
         }
         .frame(width: width, height: height)
     }
