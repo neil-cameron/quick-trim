@@ -1006,7 +1006,7 @@ struct PreviewWaveformStripView: View {
         }
         .frame(width: width, height: height)
         .onAppear {
-            generatePreviewWaveform()
+            generatePreviewWaveform(force: true)
         }
         .onChange(of: keptRegions.map { $0.id }) { _, _ in
             generatePreviewWaveform()
@@ -1016,7 +1016,7 @@ struct PreviewWaveformStripView: View {
         }
     }
 
-    private func generatePreviewWaveform() {
+    private func generatePreviewWaveform(force: Bool = false) {
         guard let url = appState.videoURL,
               previewDuration > 0 else {
             waveformData = nil
@@ -1027,7 +1027,7 @@ struct PreviewWaveformStripView: View {
         let idsChanged = currentIds != lastKeptRegionIds
         let widthChanged = abs(width - lastGeneratedWidth) > 50
 
-        guard idsChanged || widthChanged else { return }
+        guard force || idsChanged || widthChanged else { return }
 
         lastKeptRegionIds = currentIds
         lastGeneratedWidth = width

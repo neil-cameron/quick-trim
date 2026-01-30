@@ -274,6 +274,30 @@ class AppState: ObservableObject {
         if isPlaying {
             player?.pause()
         } else {
+            // In preview mode, check if we need to jump to a kept region first
+            if previewModeEnabled, let player = player {
+                let actualTime = CMTimeGetSeconds(player.currentTime())
+                let inBinnedRegion = regions.contains { region in
+                    region.isBinned && actualTime >= region.startTime - 0.01 && actualTime < region.endTime
+                }
+
+                if inBinnedRegion {
+                    // Find the next kept region
+                    if let nextKept = keptRegions.first(where: { $0.startTime >= actualTime - 0.01 }) {
+                        let cmTime = CMTime(seconds: nextKept.startTime, preferredTimescale: 600)
+                        player.seek(to: cmTime, toleranceBefore: .zero, toleranceAfter: .zero) { [weak self] _ in
+                            self?.player?.play()
+                        }
+                        return
+                    } else if let firstKept = keptRegions.first {
+                        let cmTime = CMTime(seconds: firstKept.startTime, preferredTimescale: 600)
+                        player.seek(to: cmTime, toleranceBefore: .zero, toleranceAfter: .zero) { [weak self] _ in
+                            self?.player?.play()
+                        }
+                        return
+                    }
+                }
+            }
             player?.play()
         }
     }
