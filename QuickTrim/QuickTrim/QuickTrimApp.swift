@@ -29,7 +29,7 @@ struct QuickTrimApp: App {
                     if let appState = getFocusedAppState() {
                         appState.showOpenPanel()
                     } else {
-                        openNewWindow()
+                        WindowManager.shared.openNewWindowWithOpenPanel()
                     }
                 }
                 .keyboardShortcut("o", modifiers: .command)
@@ -185,11 +185,17 @@ struct QuickTrimApp: App {
 class WindowManager {
     static let shared = WindowManager()
     var openWindowAction: (() -> Void)?
+    var showOpenPanelOnNextWindow: Bool = false
 
     func openNewWindow() {
         if let action = openWindowAction {
             action()
         }
+    }
+
+    func openNewWindowWithOpenPanel() {
+        showOpenPanelOnNextWindow = true
+        openNewWindow()
     }
 }
 
@@ -216,6 +222,14 @@ struct DocumentWindowView: View {
                 // Register the openWindow action for menu commands
                 WindowManager.shared.openWindowAction = { [openWindow] in
                     openWindow(id: "document")
+                }
+
+                // Check if we should show the open panel immediately
+                if WindowManager.shared.showOpenPanelOnNextWindow {
+                    WindowManager.shared.showOpenPanelOnNextWindow = false
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                        appState.showOpenPanel()
+                    }
                 }
             }
     }
