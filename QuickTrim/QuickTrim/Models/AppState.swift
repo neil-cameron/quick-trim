@@ -6,17 +6,17 @@
 import SwiftUI
 import AVFoundation
 import Combine
+import UniformTypeIdentifiers
 
 class AppState: ObservableObject {
-    static let shared = AppState()
-
-    // Video state
+    // Media state
     @Published var videoURL: URL?
     @Published var player: AVPlayer?
     @Published var duration: Double = 0
     @Published var currentTime: Double = 0
     @Published var frameRate: Double = 30
     @Published var isPlaying: Bool = false
+    @Published var isAudioOnly: Bool = false
 
     // Regions
     @Published var regions: [Region] = []
@@ -87,6 +87,11 @@ class AppState: ObservableObject {
     var canRedo: Bool { !redoStack.isEmpty }
     var hasUnsavedChanges: Bool { !undoStack.isEmpty && videoURL != nil }
 
+    /// True if user has created trim regions (more than the initial single region)
+    var hasUserCreatedRegions: Bool {
+        videoURL != nil && regions.count > 1
+    }
+
     var canExport: Bool {
         guard videoURL != nil, !regions.isEmpty else { return false }
         // At least one region must NOT be binned
@@ -95,16 +100,24 @@ class AppState: ObservableObject {
 
     private var timeObserver: Any?
     private var cancellables = Set<AnyCancellable>()
+    private var isAccessingSecurityScopedResource = false
 
-    private init() {}
+    // Audio skimming
+    private var skimStopTask: Task<Void, Never>?
+    @Published var isSkimming: Bool = false
+
+    init() {}
 
     func openVideo(url: URL) {
         // Clean up previous video
         cleanUp()
 
+        // Start accessing security-scoped resource for sandboxed apps
+        isAccessingSecurityScopedResource = url.startAccessingSecurityScopedResource()
+
         videoURL = url
 
-        let asset = AVAsset(url: url)
+        let asset = AVURLAsset(url: url)
         let playerItem = AVPlayerItem(asset: asset)
         player = AVPlayer(playerItem: playerItem)
 
@@ -114,18 +127,32 @@ class AppState: ObservableObject {
                 let durationValue = try await asset.load(.duration)
                 self.duration = CMTimeGetSeconds(durationValue)
 
-                if let videoTrack = try await asset.loadTracks(withMediaType: .video).first {
+                // Check for video and audio tracks
+                let videoTracks = try await asset.loadTracks(withMediaType: .video)
+                let audioTracks = try await asset.loadTracks(withMediaType: .audio)
+
+                if let videoTrack = videoTracks.first {
+                    // Has video track - treat as video file
+                    self.isAudioOnly = false
                     let nominalFrameRate = try await videoTrack.load(.nominalFrameRate)
                     self.frameRate = Double(nominalFrameRate)
+                } else if audioTracks.first != nil {
+                    // No video track but has audio - audio-only file
+                    self.isAudioOnly = true
+                    self.frameRate = 30.0  // Use standard rate for UI timeline
+                } else {
+                    // No usable tracks
+                    print("Error: No video or audio tracks found")
+                    return
                 }
 
-                // Initialize with single region covering entire video
+                // Initialize with single region covering entire media
                 self.regions = [Region(startTime: 0, endTime: self.duration)]
                 self.undoStack = []
                 self.redoStack = []
 
             } catch {
-                print("Error loading video: \(error)")
+                print("Error loading media: \(error)")
             }
         }
 
@@ -157,9 +184,17 @@ class AppState: ObservableObject {
         }
         player?.pause()
         player = nil
+
+        // Stop accessing security-scoped resource
+        if isAccessingSecurityScopedResource, let url = videoURL {
+            url.stopAccessingSecurityScopedResource()
+            isAccessingSecurityScopedResource = false
+        }
+
         videoURL = nil
         duration = 0
         currentTime = 0
+        isAudioOnly = false
         regions = []
         undoStack = []
         redoStack = []
@@ -247,6 +282,41 @@ class AppState: ObservableObject {
         player?.seek(to: cmTime, toleranceBefore: .zero, toleranceAfter: .zero)
     }
 
+    /// Seek and briefly play audio for skimming feedback (FCP-style)
+    func skimTo(time: Double) {
+        seek(to: time)
+
+        // Only do audio playback for audio-only files during skimming
+        guard isAudioOnly && skimmingEnabled else { return }
+
+        // Cancel any pending stop task
+        skimStopTask?.cancel()
+
+        // Start playing if not already
+        if !isSkimming {
+            isSkimming = true
+            player?.play()
+        }
+
+        // Schedule stop after brief playback
+        skimStopTask = Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 150_000_000) // 150ms
+            if !Task.isCancelled {
+                player?.pause()
+                isSkimming = false
+            }
+        }
+    }
+
+    /// Stop audio skimming
+    func stopSkimming() {
+        skimStopTask?.cancel()
+        if isSkimming {
+            player?.pause()
+            isSkimming = false
+        }
+    }
+
     func stepFrame(forward: Bool) {
         player?.pause()
         let frameDuration = 1.0 / frameRate
@@ -321,7 +391,12 @@ class AppState: ObservableObject {
 
     func showOpenPanel() {
         let panel = NSOpenPanel()
-        panel.allowedContentTypes = [.movie, .video, .mpeg4Movie, .quickTimeMovie, .avi]
+        panel.allowedContentTypes = [
+            // Video types
+            .movie, .video, .mpeg4Movie, .quickTimeMovie, .avi,
+            // Audio types
+            .mp3, .mpeg4Audio, .aiff, .wav
+        ]
         panel.allowsMultipleSelection = false
         panel.canChooseDirectories = false
 
@@ -338,17 +413,35 @@ class AppState: ObservableObject {
 
         // Show save panel to get write permission
         let savePanel = NSSavePanel()
-        savePanel.allowedContentTypes = [.movie, .mpeg4Movie, .quickTimeMovie]
+
+        // Set allowed types based on media type
+        // Note: AVFoundation cannot write MP3 files, so we don't offer it as an export option
+        if isAudioOnly {
+            savePanel.allowedContentTypes = [.mpeg4Audio, .aiff, .wav]
+            savePanel.title = "Export Trimmed Audio"
+            savePanel.message = "Choose where to save the exported audio"
+        } else {
+            savePanel.allowedContentTypes = [.movie, .mpeg4Movie, .quickTimeMovie]
+            savePanel.title = "Export Trimmed Video"
+            savePanel.message = "Choose where to save the exported video"
+        }
+
         savePanel.canCreateDirectories = true
         savePanel.isExtensionHidden = false
-        savePanel.title = "Export Trimmed Video"
-        savePanel.message = "Choose where to save the exported video"
         savePanel.nameFieldLabel = "Export As:"
 
         // Generate default filename
         let originalFilename = sourceURL.deletingPathExtension().lastPathComponent
-        let ext = sourceURL.pathExtension
-        savePanel.nameFieldStringValue = "\(originalFilename)_export.\(ext)"
+        let sourceExt = sourceURL.pathExtension.lowercased()
+
+        // Use appropriate output extension (MP3 sources export to M4A since AVFoundation can't write MP3)
+        let outputExt: String
+        if isAudioOnly {
+            outputExt = (sourceExt == "mp3") ? "m4a" : sourceExt
+        } else {
+            outputExt = sourceExt
+        }
+        savePanel.nameFieldStringValue = "\(originalFilename)_export.\(outputExt)"
 
         // Set default directory to source file's directory
         savePanel.directoryURL = sourceURL.deletingLastPathComponent()
@@ -380,7 +473,7 @@ class AppState: ObservableObject {
                     // Show success alert
                     let alert = NSAlert()
                     alert.messageText = "Export Complete"
-                    alert.informativeText = "Video exported to:\n\(resultURL.path)"
+                    alert.informativeText = "\(self.isAudioOnly ? "Audio" : "Video") exported to:\n\(resultURL.path)"
                     alert.alertStyle = .informational
                     alert.addButton(withTitle: "OK")
                     alert.addButton(withTitle: "Show in Finder")

@@ -179,6 +179,22 @@ struct NormalTimelineContent: View {
                         )
                     }
 
+                    // Region status bars at bottom (green for kept, red for binned) - drawn at same level as playhead
+                    if appState.duration > 0 {
+                        VStack {
+                            Spacer()
+                            HStack(spacing: 0) {
+                                ForEach(appState.regions) { region in
+                                    let regionWidth = (region.duration / appState.duration) * contentWidth
+                                    Rectangle()
+                                        .fill(region.isBinned ? Color.red : Color.green)
+                                        .frame(width: regionWidth, height: 4)
+                                }
+                            }
+                        }
+                        .frame(height: geometry.size.height)
+                    }
+
                     // Region dividers (yellow vertical lines at trim points) - drawn at same level as playhead
                     if appState.regions.count > 1 && appState.duration > 0 {
                         ForEach(appState.regions.dropLast()) { region in
@@ -214,9 +230,9 @@ struct NormalTimelineContent: View {
                     switch phase {
                     case .active(let location):
                         let time = timeFromPosition(location.x, width: contentWidth)
-                        appState.seek(to: time)
+                        appState.skimTo(time: time)
                     case .ended:
-                        break
+                        appState.stopSkimming()
                     }
                 }
             }
@@ -308,9 +324,9 @@ struct PreviewTimelineContent: View {
                     case .active(let location):
                         let previewTime = previewTimeFromPosition(location.x, width: contentWidth)
                         let sourceTime = convertFromPreviewTime(previewTime)
-                        appState.seek(to: sourceTime)
+                        appState.skimTo(time: sourceTime)
                     case .ended:
-                        break
+                        appState.stopSkimming()
                     }
                 }
             }
@@ -452,22 +468,13 @@ struct NormalThumbnailTrackView: View {
                 )
             }
 
-            // Thumbnails
-            ThumbnailStripView(width: width, height: height - statusBarHeight)
-
-            // Region status bars at bottom (green for kept, red for binned)
-            VStack(spacing: 0) {
-                Spacer()
-                HStack(spacing: 0) {
-                    ForEach(appState.regions) { region in
-                        let regionWidth = (region.duration / appState.duration) * width
-                        Rectangle()
-                            .fill(region.isBinned ? Color.red : Color.green)
-                            .frame(width: regionWidth, height: statusBarHeight)
-                    }
-                }
+            // Thumbnails or Waveform based on media type
+            if appState.isAudioOnly {
+                WaveformStripView(width: width, height: height - statusBarHeight)
+            } else {
+                ThumbnailStripView(width: width, height: height - statusBarHeight)
             }
-            // Note: Yellow dividers are now drawn at NormalTimelineContent level for proper alignment with playhead
+            // Note: Status bars and dividers are now drawn at NormalTimelineContent level for proper alignment with playhead
         }
         .frame(width: width, height: height)
     }
@@ -492,13 +499,22 @@ struct PreviewThumbnailTrackView: View {
 
     var body: some View {
         ZStack(alignment: .leading) {
-            // Thumbnails for each kept region, positioned contiguously
-            PreviewThumbnailStripView(
-                keptRegions: keptRegions,
-                previewDuration: previewDuration,
-                width: width,
-                height: height - statusBarHeight
-            )
+            // Thumbnails or Waveform for each kept region, positioned contiguously
+            if appState.isAudioOnly {
+                PreviewWaveformStripView(
+                    keptRegions: keptRegions,
+                    previewDuration: previewDuration,
+                    width: width,
+                    height: height - statusBarHeight
+                )
+            } else {
+                PreviewThumbnailStripView(
+                    keptRegions: keptRegions,
+                    previewDuration: previewDuration,
+                    width: width,
+                    height: height - statusBarHeight
+                )
+            }
 
             // Green status bar at bottom (all kept in preview mode)
             VStack(spacing: 0) {
@@ -769,8 +785,229 @@ struct PreviewThumbnailStripView: View {
     }
 }
 
+// MARK: - Waveform Strip (Normal mode - for audio files)
+
+struct WaveformStripView: View {
+    @EnvironmentObject var appState: AppState
+    @State private var waveformData: WaveformData?
+    @State private var lastGeneratedURL: URL?
+    @State private var lastGeneratedWidth: CGFloat = 0
+    @State private var generationTask: Task<Void, Never>?
+
+    let width: CGFloat
+    let height: CGFloat
+
+    var body: some View {
+        ZStack {
+            if let data = waveformData {
+                TimelineWaveformCanvas(
+                    samples: data.samples,
+                    regions: appState.regions,
+                    duration: appState.duration,
+                    width: width,
+                    height: height
+                )
+            } else {
+                Rectangle()
+                    .fill(Color.black.opacity(0.3))
+                ProgressView()
+            }
+        }
+        .frame(width: width, height: height)
+        .onAppear {
+            loadWaveformIfNeeded()
+        }
+        .onChange(of: appState.videoURL) { _, _ in
+            lastGeneratedURL = nil
+            waveformData = nil
+            loadWaveformIfNeeded()
+        }
+        .onChange(of: width) { _, newWidth in
+            // Regenerate if width changed significantly (for zoom)
+            let widthRatio = lastGeneratedWidth > 0 ? newWidth / lastGeneratedWidth : 0
+            if widthRatio < 0.8 || widthRatio > 1.2 || lastGeneratedWidth == 0 {
+                loadWaveformIfNeeded()
+            }
+        }
+    }
+
+    private func loadWaveformIfNeeded() {
+        guard let url = appState.videoURL, appState.duration > 0 else { return }
+
+        let urlChanged = url != lastGeneratedURL
+        let widthRatio = lastGeneratedWidth > 0 ? width / lastGeneratedWidth : 0
+        let widthSignificantlyChanged = widthRatio < 0.8 || widthRatio > 1.2 || lastGeneratedWidth == 0
+
+        guard urlChanged || widthSignificantlyChanged else { return }
+
+        // Cancel any in-flight generation
+        generationTask?.cancel()
+
+        lastGeneratedURL = url
+        lastGeneratedWidth = width
+
+        generationTask = Task {
+            do {
+                // Calculate samples based on width - more samples for wider views
+                let samplesNeeded = max(100, Int(width / 2))  // At least 100 samples
+                let samplesPerSecond = max(50, samplesNeeded / max(1, Int(appState.duration)))
+                let data = try await WaveformGenerator.generateWaveform(
+                    from: url,
+                    samplesPerSecond: samplesPerSecond
+                )
+                if !Task.isCancelled {
+                    await MainActor.run {
+                        self.waveformData = data
+                    }
+                }
+            } catch {
+                if !Task.isCancelled {
+                    print("Waveform generation failed: \(error)")
+                }
+            }
+        }
+    }
+}
+
+struct TimelineWaveformCanvas: View {
+    let samples: [Float]
+    let regions: [Region]
+    let duration: Double
+    let width: CGFloat
+    let height: CGFloat
+
+    var body: some View {
+        Canvas { context, size in
+            let midY = size.height / 2
+            let barWidth = max(1, size.width / CGFloat(max(1, samples.count)))
+
+            for (index, sample) in samples.enumerated() {
+                let x = CGFloat(index) * barWidth
+                let normalizedTime = Double(index) / Double(max(1, samples.count)) * duration
+
+                // Determine if this sample is in a binned region
+                let isBinned = regions.contains { region in
+                    region.isBinned &&
+                    normalizedTime >= region.startTime &&
+                    normalizedTime < region.endTime
+                }
+
+                let barHeight = CGFloat(abs(sample)) * midY * 0.9
+                let color: Color = isBinned ? .red.opacity(0.5) : .green
+
+                let rect = CGRect(
+                    x: x,
+                    y: midY - barHeight,
+                    width: max(barWidth - 0.5, 1),
+                    height: barHeight * 2
+                )
+                context.fill(Path(rect), with: .color(color))
+            }
+        }
+    }
+}
+
+// MARK: - Preview Waveform Strip (collapsed mode - for audio files)
+
+struct PreviewWaveformStripView: View {
+    @EnvironmentObject var appState: AppState
+    @State private var waveformData: WaveformData?
+    @State private var lastKeptRegionIds: [UUID] = []
+    @State private var lastGeneratedWidth: CGFloat = 0
+
+    let keptRegions: [Region]
+    let previewDuration: Double
+    let width: CGFloat
+    let height: CGFloat
+
+    var body: some View {
+        ZStack {
+            if let data = waveformData {
+                PreviewWaveformCanvas(
+                    samples: data.samples,
+                    width: width,
+                    height: height
+                )
+            } else {
+                Rectangle()
+                    .fill(Color.black.opacity(0.3))
+                ProgressView()
+            }
+        }
+        .frame(width: width, height: height)
+        .onAppear {
+            generatePreviewWaveform()
+        }
+        .onChange(of: keptRegions.map { $0.id }) { _, _ in
+            generatePreviewWaveform()
+        }
+        .onChange(of: width) { _, _ in
+            generatePreviewWaveform()
+        }
+    }
+
+    private func generatePreviewWaveform() {
+        guard let url = appState.videoURL,
+              previewDuration > 0 else {
+            waveformData = nil
+            return
+        }
+
+        let currentIds = keptRegions.map { $0.id }
+        let idsChanged = currentIds != lastKeptRegionIds
+        let widthChanged = abs(width - lastGeneratedWidth) > 50
+
+        guard idsChanged || widthChanged else { return }
+
+        lastKeptRegionIds = currentIds
+        lastGeneratedWidth = width
+
+        Task {
+            do {
+                // Generate waveform for kept regions only
+                let data = try await WaveformGenerator.generateWaveform(
+                    from: url,
+                    forRegions: keptRegions,
+                    samplesPerSecond: 100
+                )
+                await MainActor.run {
+                    self.waveformData = data
+                }
+            } catch {
+                print("Preview waveform generation failed: \(error)")
+            }
+        }
+    }
+}
+
+struct PreviewWaveformCanvas: View {
+    let samples: [Float]
+    let width: CGFloat
+    let height: CGFloat
+
+    var body: some View {
+        Canvas { context, size in
+            let midY = size.height / 2
+            let barWidth = max(1, size.width / CGFloat(max(1, samples.count)))
+
+            for (index, sample) in samples.enumerated() {
+                let x = CGFloat(index) * barWidth
+                let barHeight = CGFloat(abs(sample)) * midY * 0.9
+
+                let rect = CGRect(
+                    x: x,
+                    y: midY - barHeight,
+                    width: max(barWidth - 0.5, 1),
+                    height: barHeight * 2
+                )
+                context.fill(Path(rect), with: .color(.green))
+            }
+        }
+    }
+}
+
 #Preview {
     TimelineView()
-        .environmentObject(AppState.shared)
+        .environmentObject(AppState())
         .frame(width: 800, height: 120)
 }

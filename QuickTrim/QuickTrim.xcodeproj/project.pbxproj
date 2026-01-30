@@ -7,6 +7,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		2898D8852F2CC48B003629FC /* WaveformGenerator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2898D8842F2CC48B003629FC /* WaveformGenerator.swift */; };
 		A1000001263E8F5C00000001 /* QuickTrimApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1000002263E8F5C00000001 /* QuickTrimApp.swift */; };
 		A1000003263E8F5C00000001 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1000004263E8F5C00000001 /* ContentView.swift */; };
 		A1000005263E8F5C00000001 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = A1000006263E8F5C00000001 /* Assets.xcassets */; };
@@ -19,6 +20,7 @@
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
+		2898D8842F2CC48B003629FC /* WaveformGenerator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WaveformGenerator.swift; sourceTree = "<group>"; };
 		A1000002263E8F5C00000001 /* QuickTrimApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QuickTrimApp.swift; sourceTree = "<group>"; };
 		A1000004263E8F5C00000001 /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
 		A1000006263E8F5C00000001 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
@@ -97,6 +99,7 @@
 		A100001C263E8F5C00000001 /* Services */ = {
 			isa = PBXGroup;
 			children = (
+				2898D8842F2CC48B003629FC /* WaveformGenerator.swift */,
 				A1000012263E8F5C00000001 /* VideoExporter.swift */,
 			);
 			path = Services;
@@ -176,6 +179,7 @@
 				A1000007263E8F5C00000001 /* AppState.swift in Sources */,
 				A1000009263E8F5C00000001 /* Region.swift in Sources */,
 				A100000B263E8F5C00000001 /* VideoPlayerView.swift in Sources */,
+				2898D8852F2CC48B003629FC /* WaveformGenerator.swift in Sources */,
 				A100000D263E8F5C00000001 /* TimelineView.swift in Sources */,
 				A100000F263E8F5C00000001 /* RegionsPaneView.swift in Sources */,
 				A1000011263E8F5C00000001 /* VideoExporter.swift in Sources */,

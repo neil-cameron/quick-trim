@@ -31,14 +31,13 @@ enum ExportError: LocalizedError {
     }
 }
 
-@MainActor
 class VideoExporter {
 
     static func export(
         sourceURL: URL,
         regions: [Region],
         outputURL: URL,
-        progressHandler: @escaping (Double) -> Void
+        progressHandler: @escaping @Sendable (Double) -> Void
     ) async throws -> URL {
         guard !regions.isEmpty else {
             throw ExportError.noRegionsToExport
@@ -72,7 +71,7 @@ class VideoExporter {
         sourceAsset: AVURLAsset,
         regions: [Region],
         outputURL: URL,
-        progressHandler: @escaping (Double) -> Void
+        progressHandler: @escaping @Sendable (Double) -> Void
     ) async throws -> Bool {
 
         // Create composition
@@ -82,19 +81,24 @@ class VideoExporter {
         let videoTracks = try await sourceAsset.loadTracks(withMediaType: .video)
         let audioTracks = try await sourceAsset.loadTracks(withMediaType: .audio)
 
-        guard let sourceVideoTrack = videoTracks.first else {
+        let isAudioOnly = videoTracks.isEmpty && !audioTracks.isEmpty
+
+        // Require at least one track type
+        guard !videoTracks.isEmpty || !audioTracks.isEmpty else {
             throw ExportError.assetLoadFailed
         }
 
         // Add composition tracks
-        guard let compositionVideoTrack = composition.addMutableTrack(
-            withMediaType: .video,
-            preferredTrackID: kCMPersistentTrackID_Invalid
-        ) else {
-            throw ExportError.compositionFailed
+        var compositionVideoTrack: AVMutableCompositionTrack?
+        var compositionAudioTrack: AVMutableCompositionTrack?
+
+        if let sourceVideoTrack = videoTracks.first {
+            compositionVideoTrack = composition.addMutableTrack(
+                withMediaType: .video,
+                preferredTrackID: kCMPersistentTrackID_Invalid
+            )
         }
 
-        var compositionAudioTrack: AVMutableCompositionTrack?
         if audioTracks.first != nil {
             compositionAudioTrack = composition.addMutableTrack(
                 withMediaType: .audio,
@@ -111,12 +115,17 @@ class VideoExporter {
             let timeRange = CMTimeRange(start: startTime, end: endTime)
 
             do {
-                try compositionVideoTrack.insertTimeRange(
-                    timeRange,
-                    of: sourceVideoTrack,
-                    at: currentTime
-                )
+                // Insert video if available
+                if let sourceVideoTrack = videoTracks.first,
+                   let videoTrack = compositionVideoTrack {
+                    try videoTrack.insertTimeRange(
+                        timeRange,
+                        of: sourceVideoTrack,
+                        at: currentTime
+                    )
+                }
 
+                // Insert audio if available
                 if let sourceAudioTrack = audioTracks.first,
                    let audioTrack = compositionAudioTrack {
                     try audioTrack.insertTimeRange(
@@ -133,21 +142,42 @@ class VideoExporter {
             }
         }
 
-        // Preserve video orientation
-        let preferredTransform = try await sourceVideoTrack.load(.preferredTransform)
-        compositionVideoTrack.preferredTransform = preferredTransform
+        // Preserve video orientation if video exists
+        if let sourceVideoTrack = videoTracks.first,
+           let videoTrack = compositionVideoTrack {
+            let preferredTransform = try await sourceVideoTrack.load(.preferredTransform)
+            videoTrack.preferredTransform = preferredTransform
+        }
 
-        // Determine output file type based on source
+        // Determine output file type based on source and media type
         let sourceExtension = sourceAsset.url.pathExtension.lowercased()
         let outputFileType: AVFileType
 
-        switch sourceExtension {
-        case "mov":
-            outputFileType = .mov
-        case "m4v":
-            outputFileType = .m4v
-        default:
-            outputFileType = .mp4
+        if isAudioOnly {
+            // Audio-only output types
+            switch sourceExtension {
+            case "mp3":
+                // MP3 can't be written directly, use M4A
+                outputFileType = .m4a
+            case "aiff", "aif":
+                outputFileType = .aiff
+            case "wav", "wave":
+                outputFileType = .wav
+            case "m4a":
+                outputFileType = .m4a
+            default:
+                outputFileType = .m4a  // Default audio format
+            }
+        } else {
+            // Video output types
+            switch sourceExtension {
+            case "mov":
+                outputFileType = .mov
+            case "m4v":
+                outputFileType = .m4v
+            default:
+                outputFileType = .mp4
+            }
         }
 
         // Create export session - try passthrough first
@@ -159,22 +189,26 @@ class VideoExporter {
             exportSession.outputFileType = outputFileType
             exportSession.shouldOptimizeForNetworkUse = false
 
-            // Start progress monitoring using Timer
-            let timer = Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { _ in
-                Task { @MainActor in
-                    progressHandler(Double(exportSession.progress))
+            // Monitor progress in background
+            let progressTask = Task.detached {
+                while !Task.isCancelled {
+                    let progress = exportSession.progress
+                    await MainActor.run {
+                        progressHandler(Double(progress))
+                    }
+                    try? await Task.sleep(nanoseconds: 100_000_000) // 0.1 seconds
                 }
             }
 
             // Export
             await exportSession.export()
 
-            // Stop timer
-            timer.invalidate()
+            // Stop progress monitoring
+            progressTask.cancel()
 
             switch exportSession.status {
             case .completed:
-                progressHandler(1.0)
+                await MainActor.run { progressHandler(1.0) }
                 return true
             case .failed:
                 // If passthrough failed, try high quality encoding
@@ -205,15 +239,19 @@ class VideoExporter {
         composition: AVComposition,
         outputURL: URL,
         outputFileType: AVFileType,
-        progressHandler: @escaping (Double) -> Void
+        progressHandler: @escaping @Sendable (Double) -> Void
     ) async throws -> Bool {
 
         // Remove existing file if any (from failed passthrough attempt)
         try? FileManager.default.removeItem(at: outputURL)
 
+        // Determine preset based on whether this is audio-only
+        let isAudioOnly = [.m4a, .aiff, .wav, .mp3].contains(outputFileType)
+        let presetName = isAudioOnly ? AVAssetExportPresetAppleM4A : AVAssetExportPresetHighestQuality
+
         guard let exportSession = AVAssetExportSession(
             asset: composition,
-            presetName: AVAssetExportPresetHighestQuality
+            presetName: presetName
         ) else {
             throw ExportError.exportFailed("Could not create export session")
         }
@@ -222,22 +260,26 @@ class VideoExporter {
         exportSession.outputFileType = outputFileType
         exportSession.shouldOptimizeForNetworkUse = false
 
-        // Start progress monitoring using Timer
-        let timer = Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { _ in
-            Task { @MainActor in
-                progressHandler(Double(exportSession.progress))
+        // Monitor progress in background
+        let progressTask = Task.detached {
+            while !Task.isCancelled {
+                let progress = exportSession.progress
+                await MainActor.run {
+                    progressHandler(Double(progress))
+                }
+                try? await Task.sleep(nanoseconds: 100_000_000) // 0.1 seconds
             }
         }
 
         // Export
         await exportSession.export()
 
-        // Stop timer
-        timer.invalidate()
+        // Stop progress monitoring
+        progressTask.cancel()
 
         switch exportSession.status {
         case .completed:
-            progressHandler(1.0)
+            await MainActor.run { progressHandler(1.0) }
             return true
         case .failed:
             if let error = exportSession.error {

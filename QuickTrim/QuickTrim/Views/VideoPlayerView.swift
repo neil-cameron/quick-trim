@@ -12,15 +12,20 @@ struct VideoPlayerView: View {
     var body: some View {
         VStack(spacing: 0) {
             if let player = appState.player {
-                VideoPlayer(player: player)
-                    .onAppear {
-                        // Ensure video controls are visible
-                    }
+                if appState.isAudioOnly {
+                    // Show waveform visualization for audio files
+                    AudioVisualizationView()
+                } else {
+                    VideoPlayer(player: player)
+                        .onAppear {
+                            // Ensure video controls are visible
+                        }
+                }
             } else {
                 Rectangle()
                     .fill(Color.black)
                     .overlay(
-                        Text("No video loaded")
+                        Text("No media loaded")
                             .foregroundColor(.gray)
                     )
             }
@@ -132,8 +137,134 @@ struct PlaybackSpeedPicker: View {
     }
 }
 
+// MARK: - Audio Visualization View
+
+struct AudioVisualizationView: View {
+    @EnvironmentObject var appState: AppState
+    @State private var waveformData: WaveformData?
+    @State private var isLoading = true
+
+    var body: some View {
+        GeometryReader { geometry in
+            ZStack {
+                // Background
+                Rectangle()
+                    .fill(Color.black)
+
+                if isLoading {
+                    VStack(spacing: 12) {
+                        ProgressView()
+                            .scaleEffect(1.5)
+                        Text("Loading waveform...")
+                            .foregroundColor(.gray)
+                    }
+                } else if let data = waveformData {
+                    // Static waveform centered in view
+                    PlayerWaveformCanvas(
+                        samples: data.samples,
+                        playbackPosition: appState.duration > 0 ? appState.currentTime / appState.duration : 0,
+                        regions: appState.regions,
+                        duration: appState.duration
+                    )
+                    .padding(20)
+                } else {
+                    // Fallback: audio icon
+                    VStack(spacing: 12) {
+                        Image(systemName: "waveform")
+                            .font(.system(size: 80))
+                            .foregroundColor(.green)
+                        Text("Audio File")
+                            .foregroundColor(.secondary)
+                    }
+                }
+            }
+        }
+        .onAppear {
+            loadWaveform()
+        }
+        .onChange(of: appState.videoURL) { _, _ in
+            loadWaveform()
+        }
+    }
+
+    private func loadWaveform() {
+        guard let url = appState.videoURL else { return }
+        isLoading = true
+        waveformData = nil
+
+        Task {
+            do {
+                let data = try await WaveformGenerator.generateWaveform(
+                    from: url,
+                    samplesPerSecond: 200  // Higher resolution for player view
+                )
+                await MainActor.run {
+                    self.waveformData = data
+                    self.isLoading = false
+                }
+            } catch {
+                print("Waveform generation failed: \(error)")
+                await MainActor.run {
+                    self.isLoading = false
+                }
+            }
+        }
+    }
+}
+
+struct PlayerWaveformCanvas: View {
+    let samples: [Float]
+    let playbackPosition: Double  // 0.0 to 1.0
+    let regions: [Region]
+    let duration: Double
+
+    var body: some View {
+        Canvas { context, size in
+            let midY = size.height / 2
+            let barWidth = max(1, size.width / CGFloat(samples.count))
+
+            for (index, sample) in samples.enumerated() {
+                let x = CGFloat(index) * barWidth
+                let normalizedTime = Double(index) / Double(max(1, samples.count)) * duration
+                let barHeight = CGFloat(abs(sample)) * midY * 0.9
+
+                // Determine if this sample is in a binned region
+                let isBinned = regions.contains { region in
+                    region.isBinned &&
+                    normalizedTime >= region.startTime &&
+                    normalizedTime < region.endTime
+                }
+
+                // Color based on playback position and binned status
+                let normalizedPosition = CGFloat(index) / CGFloat(max(1, samples.count))
+                let baseColor: Color = isBinned ? .red : .green
+                let color: Color = normalizedPosition < playbackPosition
+                    ? baseColor
+                    : baseColor.opacity(0.4)
+
+                // Draw symmetric bar
+                let rect = CGRect(
+                    x: x,
+                    y: midY - barHeight,
+                    width: max(barWidth - 0.5, 1),
+                    height: barHeight * 2
+                )
+                context.fill(Path(rect), with: .color(color))
+            }
+
+            // Draw playhead line
+            let playheadX = size.width * playbackPosition
+            let playheadPath = Path { path in
+                path.move(to: CGPoint(x: playheadX, y: 0))
+                path.addLine(to: CGPoint(x: playheadX, y: size.height))
+            }
+            context.stroke(playheadPath, with: .color(.red), lineWidth: 2)
+        }
+    }
+}
+
 #Preview {
     VideoPlayerView()
-        .environmentObject(AppState.shared)
+        .environmentObject(AppState())
         .frame(width: 600, height: 400)
 }

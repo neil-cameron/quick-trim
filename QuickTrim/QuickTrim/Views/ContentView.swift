@@ -65,18 +65,18 @@ struct DropZoneView: View {
 
     var body: some View {
         VStack(spacing: 20) {
-            Image(systemName: "film")
+            Image(systemName: "play.rectangle.on.rectangle")
                 .font(.system(size: 60))
                 .foregroundColor(.secondary)
 
-            Text("Drop a video file here")
+            Text("Drop a video or audio file here")
                 .font(.title2)
                 .foregroundColor(.secondary)
 
             Text("or")
                 .foregroundColor(.secondary)
 
-            Button("Open Video...") {
+            Button("Open Media...") {
                 appState.showOpenPanel()
             }
             .buttonStyle(.borderedProminent)
@@ -135,22 +135,33 @@ struct ExportProgressOverlay: View {
 }
 
 struct KeyEventHandler: NSViewRepresentable {
+    @EnvironmentObject var appState: AppState
+
     func makeNSView(context: Context) -> KeyEventView {
         let view = KeyEventView()
+        view.appState = appState
         DispatchQueue.main.async {
             view.window?.makeFirstResponder(view)
         }
         return view
     }
 
-    func updateNSView(_ nsView: KeyEventView, context: Context) {}
+    func updateNSView(_ nsView: KeyEventView, context: Context) {
+        nsView.appState = appState
+    }
 }
 
 class KeyEventView: NSView {
+    weak var appState: AppState?
+
     override var acceptsFirstResponder: Bool { true }
 
     override func keyDown(with event: NSEvent) {
-        let appState = AppState.shared
+        guard let appState = appState else {
+            super.keyDown(with: event)
+            return
+        }
+
         let modifiers = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
 
         switch event.keyCode {
@@ -206,5 +217,5 @@ class KeyEventView: NSView {
 
 #Preview {
     ContentView()
-        .environmentObject(AppState.shared)
+        .environmentObject(AppState())
 }

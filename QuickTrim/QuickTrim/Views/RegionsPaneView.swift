@@ -103,9 +103,14 @@ struct RegionRowView: View {
 
     var body: some View {
         HStack(spacing: 10) {
-            // Thumbnail
+            // Thumbnail or waveform preview
             ZStack {
-                if let thumbnail = thumbnail {
+                if appState.isAudioOnly {
+                    // Show mini waveform for audio files
+                    RegionWaveformPreview(region: region)
+                        .frame(width: 60, height: 40)
+                        .cornerRadius(4)
+                } else if let thumbnail = thumbnail {
                     Image(nsImage: thumbnail)
                         .resizable()
                         .aspectRatio(contentMode: .fill)
@@ -135,7 +140,9 @@ struct RegionRowView: View {
                 }
             }
             .onAppear {
-                loadThumbnail()
+                if !appState.isAudioOnly {
+                    loadThumbnail()
+                }
             }
 
             // Region info
@@ -231,8 +238,40 @@ struct RegionRowView: View {
     }
 }
 
+// MARK: - Region Waveform Preview (for audio files)
+
+struct RegionWaveformPreview: View {
+    let region: Region
+
+    var body: some View {
+        Canvas { context, size in
+            let color: Color = region.isBinned ? .red : .green
+
+            // Draw a simple waveform representation
+            let midY = size.height / 2
+            let barCount = 15
+            let barWidth = size.width / CGFloat(barCount)
+
+            for i in 0..<barCount {
+                // Generate pseudo-random heights based on region timing for visual variety
+                let seed = (region.startTime + Double(i) * 0.1).truncatingRemainder(dividingBy: 1.0)
+                let height = CGFloat(0.3 + seed * 0.6) * midY
+
+                let rect = CGRect(
+                    x: CGFloat(i) * barWidth + 1,
+                    y: midY - height,
+                    width: barWidth - 2,
+                    height: height * 2
+                )
+                context.fill(Path(rect), with: .color(color.opacity(0.8)))
+            }
+        }
+        .background(Color.black.opacity(0.3))
+    }
+}
+
 #Preview {
     RegionsPaneView()
-        .environmentObject(AppState.shared)
+        .environmentObject(AppState())
         .frame(width: 280, height: 400)
 }
