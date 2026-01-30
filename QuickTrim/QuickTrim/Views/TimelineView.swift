@@ -48,6 +48,14 @@ struct TimelineView: View {
                 .controlSize(.small)
                 .help("Enable skimming - hover to preview (⌘⌥S)")
 
+                // Capture Playhead toggle (auto-scroll to follow playhead)
+                Toggle(isOn: $appState.capturePlayheadEnabled) {
+                    Image(systemName: "location.fill")
+                }
+                .toggleStyle(.button)
+                .controlSize(.small)
+                .help("Capture playhead - auto-scroll to keep playhead visible")
+
                 // Preview mode toggle
                 Toggle(isOn: $appState.previewModeEnabled) {
                     Label("Preview", systemImage: "eye")
@@ -159,80 +167,99 @@ struct NormalTimelineContent: View {
     var body: some View {
         GeometryReader { geometry in
             let contentWidth = max(geometry.size.width * appState.timelineZoom, geometry.size.width)
+            let viewportWidth = geometry.size.width
 
-            ScrollView(.horizontal, showsIndicators: true) {
-                ZStack(alignment: .topLeading) {
-                    Rectangle()
-                        .fill(Color(nsColor: .textBackgroundColor))
+            ScrollViewReader { scrollProxy in
+                ScrollView(.horizontal, showsIndicators: true) {
+                    ZStack(alignment: .topLeading) {
+                        Rectangle()
+                            .fill(Color(nsColor: .textBackgroundColor))
 
-                    VStack(spacing: 0) {
-                        TimecodeRulerView(
-                            duration: appState.duration,
-                            width: contentWidth,
-                            zoom: appState.timelineZoom
-                        )
-                        .frame(height: timecodeHeight)
+                        VStack(spacing: 0) {
+                            TimecodeRulerView(
+                                duration: appState.duration,
+                                width: contentWidth,
+                                zoom: appState.timelineZoom
+                            )
+                            .frame(height: timecodeHeight)
 
-                        NormalThumbnailTrackView(
-                            width: contentWidth,
-                            height: geometry.size.height - timecodeHeight - 10
-                        )
-                    }
+                            NormalThumbnailTrackView(
+                                width: contentWidth,
+                                height: geometry.size.height - timecodeHeight - 10
+                            )
+                        }
 
-                    // Region status bars at bottom (green for kept, red for binned) - drawn at same level as playhead
-                    if appState.duration > 0 {
-                        VStack {
-                            Spacer()
-                            HStack(spacing: 0) {
-                                ForEach(appState.regions) { region in
-                                    let regionWidth = (region.duration / appState.duration) * contentWidth
-                                    Rectangle()
-                                        .fill(region.isBinned ? Color.red : Color.green)
-                                        .frame(width: regionWidth, height: 4)
+                        // Region status bars at bottom (green for kept, red for binned) - drawn at same level as playhead
+                        if appState.duration > 0 {
+                            VStack {
+                                Spacer()
+                                HStack(spacing: 0) {
+                                    ForEach(appState.regions) { region in
+                                        let regionWidth = (region.duration / appState.duration) * contentWidth
+                                        Rectangle()
+                                            .fill(region.isBinned ? Color.red : Color.green)
+                                            .frame(width: regionWidth, height: 4)
+                                    }
                                 }
                             }
+                            .frame(height: geometry.size.height)
                         }
-                        .frame(height: geometry.size.height)
-                    }
 
-                    // Region dividers (yellow vertical lines at trim points) - drawn at same level as playhead
-                    if appState.regions.count > 1 && appState.duration > 0 {
-                        ForEach(appState.regions.dropLast()) { region in
-                            let x = (region.endTime / appState.duration) * contentWidth
+                        // Region dividers (yellow vertical lines at trim points) - drawn at same level as playhead
+                        if appState.regions.count > 1 && appState.duration > 0 {
+                            ForEach(appState.regions.dropLast()) { region in
+                                let x = (region.endTime / appState.duration) * contentWidth
+                                Rectangle()
+                                    .fill(Color.yellow)
+                                    .frame(width: 2, height: geometry.size.height)
+                                    .position(x: x, y: geometry.size.height / 2)
+                            }
+                        }
+
+                        // Playhead with ID for scrolling
+                        if appState.duration > 0 {
+                            let playheadX = (appState.currentTime / appState.duration) * contentWidth
+
                             Rectangle()
-                                .fill(Color.yellow)
+                                .fill(Color.red)
                                 .frame(width: 2, height: geometry.size.height)
-                                .position(x: x, y: geometry.size.height / 2)
+                                .position(x: playheadX, y: geometry.size.height / 2)
+                                .id("playhead")
                         }
                     }
-
-                    // Playhead
-                    if appState.duration > 0 {
-                        let playheadX = (appState.currentTime / appState.duration) * contentWidth
-
-                        Rectangle()
-                            .fill(Color.red)
-                            .frame(width: 2, height: geometry.size.height)
-                            .position(x: playheadX, y: geometry.size.height / 2)
+                    .frame(width: contentWidth, height: geometry.size.height)
+                    .contentShape(Rectangle())
+                    .gesture(
+                        DragGesture(minimumDistance: 0)
+                            .onChanged { value in
+                                let time = timeFromPosition(value.location.x, width: contentWidth)
+                                appState.seek(to: time)
+                            }
+                    )
+                    .onContinuousHover { phase in
+                        guard appState.skimmingEnabled else { return }
+                        switch phase {
+                        case .active(let location):
+                            let time = timeFromPosition(location.x, width: contentWidth)
+                            appState.skimTo(time: time)
+                        case .ended:
+                            appState.stopSkimming()
+                        }
                     }
                 }
-                .frame(width: contentWidth, height: geometry.size.height)
-                .contentShape(Rectangle())
-                .gesture(
-                    DragGesture(minimumDistance: 0)
-                        .onChanged { value in
-                            let time = timeFromPosition(value.location.x, width: contentWidth)
-                            appState.seek(to: time)
+                .onChange(of: appState.currentTime) { _, _ in
+                    if appState.capturePlayheadEnabled && appState.duration > 0 {
+                        withAnimation(.linear(duration: 0.1)) {
+                            scrollProxy.scrollTo("playhead", anchor: .center)
                         }
-                )
-                .onContinuousHover { phase in
-                    guard appState.skimmingEnabled else { return }
-                    switch phase {
-                    case .active(let location):
-                        let time = timeFromPosition(location.x, width: contentWidth)
-                        appState.skimTo(time: time)
-                    case .ended:
-                        appState.stopSkimming()
+                    }
+                }
+                .onChange(of: appState.capturePlayheadEnabled) { _, newValue in
+                    // Scroll to playhead immediately when enabling capture
+                    if newValue && appState.duration > 0 {
+                        withAnimation(.easeInOut(duration: 0.3)) {
+                            scrollProxy.scrollTo("playhead", anchor: .center)
+                        }
                     }
                 }
             }
@@ -264,69 +291,87 @@ struct PreviewTimelineContent: View {
         GeometryReader { geometry in
             let contentWidth = max(geometry.size.width * appState.timelineZoom, geometry.size.width)
 
-            ScrollView(.horizontal, showsIndicators: true) {
-                ZStack(alignment: .topLeading) {
-                    Rectangle()
-                        .fill(Color(nsColor: .textBackgroundColor))
+            ScrollViewReader { scrollProxy in
+                ScrollView(.horizontal, showsIndicators: true) {
+                    ZStack(alignment: .topLeading) {
+                        Rectangle()
+                            .fill(Color(nsColor: .textBackgroundColor))
 
-                    VStack(spacing: 0) {
-                        // Preview timecode ruler (shows collapsed time)
-                        TimecodeRulerView(
-                            duration: previewDuration,
-                            width: contentWidth,
-                            zoom: appState.timelineZoom
-                        )
-                        .frame(height: timecodeHeight)
+                        VStack(spacing: 0) {
+                            // Preview timecode ruler (shows collapsed time)
+                            TimecodeRulerView(
+                                duration: previewDuration,
+                                width: contentWidth,
+                                zoom: appState.timelineZoom
+                            )
+                            .frame(height: timecodeHeight)
 
-                        // Preview thumbnail track
-                        PreviewThumbnailTrackView(
-                            width: contentWidth,
-                            height: geometry.size.height - timecodeHeight - 10
-                        )
-                    }
+                            // Preview thumbnail track
+                            PreviewThumbnailTrackView(
+                                width: contentWidth,
+                                height: geometry.size.height - timecodeHeight - 10
+                            )
+                        }
 
-                    // Region dividers between kept regions (green vertical lines) - drawn at same level as playhead
-                    if keptRegions.count > 1 && previewDuration > 0 {
-                        ForEach(Array(keptRegions.dropLast().enumerated()), id: \.element.id) { index, _ in
-                            let previewTime = keptRegions.prefix(index + 1).reduce(0) { $0 + $1.duration }
-                            let x = (previewTime / previewDuration) * contentWidth
+                        // Region dividers between kept regions (green vertical lines) - drawn at same level as playhead
+                        if keptRegions.count > 1 && previewDuration > 0 {
+                            ForEach(Array(keptRegions.dropLast().enumerated()), id: \.element.id) { index, _ in
+                                let previewTime = keptRegions.prefix(index + 1).reduce(0) { $0 + $1.duration }
+                                let x = (previewTime / previewDuration) * contentWidth
+                                Rectangle()
+                                    .fill(Color.green.opacity(0.7))
+                                    .frame(width: 2, height: geometry.size.height)
+                                    .position(x: x, y: geometry.size.height / 2)
+                            }
+                        }
+
+                        // Playhead in preview coordinates
+                        if previewDuration > 0 {
+                            let previewTime = convertToPreviewTime(appState.currentTime)
+                            let playheadX = (previewTime / previewDuration) * contentWidth
+
                             Rectangle()
-                                .fill(Color.green.opacity(0.7))
+                                .fill(Color.red)
                                 .frame(width: 2, height: geometry.size.height)
-                                .position(x: x, y: geometry.size.height / 2)
+                                .position(x: playheadX, y: geometry.size.height / 2)
+                                .id("previewPlayhead")
                         }
                     }
-
-                    // Playhead in preview coordinates
-                    if previewDuration > 0 {
-                        let previewTime = convertToPreviewTime(appState.currentTime)
-                        let playheadX = (previewTime / previewDuration) * contentWidth
-
-                        Rectangle()
-                            .fill(Color.red)
-                            .frame(width: 2, height: geometry.size.height)
-                            .position(x: playheadX, y: geometry.size.height / 2)
+                    .frame(width: contentWidth, height: geometry.size.height)
+                    .contentShape(Rectangle())
+                    .gesture(
+                        DragGesture(minimumDistance: 0)
+                            .onChanged { value in
+                                let previewTime = previewTimeFromPosition(value.location.x, width: contentWidth)
+                                let sourceTime = convertFromPreviewTime(previewTime)
+                                appState.seek(to: sourceTime)
+                            }
+                    )
+                    .onContinuousHover { phase in
+                        guard appState.skimmingEnabled else { return }
+                        switch phase {
+                        case .active(let location):
+                            let previewTime = previewTimeFromPosition(location.x, width: contentWidth)
+                            let sourceTime = convertFromPreviewTime(previewTime)
+                            appState.skimTo(time: sourceTime)
+                        case .ended:
+                            appState.stopSkimming()
+                        }
                     }
                 }
-                .frame(width: contentWidth, height: geometry.size.height)
-                .contentShape(Rectangle())
-                .gesture(
-                    DragGesture(minimumDistance: 0)
-                        .onChanged { value in
-                            let previewTime = previewTimeFromPosition(value.location.x, width: contentWidth)
-                            let sourceTime = convertFromPreviewTime(previewTime)
-                            appState.seek(to: sourceTime)
+                .onChange(of: appState.currentTime) { _, _ in
+                    if appState.capturePlayheadEnabled && previewDuration > 0 {
+                        withAnimation(.linear(duration: 0.1)) {
+                            scrollProxy.scrollTo("previewPlayhead", anchor: .center)
                         }
-                )
-                .onContinuousHover { phase in
-                    guard appState.skimmingEnabled else { return }
-                    switch phase {
-                    case .active(let location):
-                        let previewTime = previewTimeFromPosition(location.x, width: contentWidth)
-                        let sourceTime = convertFromPreviewTime(previewTime)
-                        appState.skimTo(time: sourceTime)
-                    case .ended:
-                        appState.stopSkimming()
+                    }
+                }
+                .onChange(of: appState.capturePlayheadEnabled) { _, newValue in
+                    // Scroll to playhead immediately when enabling capture
+                    if newValue && previewDuration > 0 {
+                        withAnimation(.easeInOut(duration: 0.3)) {
+                            scrollProxy.scrollTo("previewPlayhead", anchor: .center)
+                        }
                     }
                 }
             }
