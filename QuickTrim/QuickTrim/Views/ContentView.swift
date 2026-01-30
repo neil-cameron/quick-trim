@@ -148,6 +148,12 @@ struct KeyEventHandler: NSViewRepresentable {
 
     func updateNSView(_ nsView: KeyEventView, context: Context) {
         nsView.appState = appState
+        // Re-establish first responder if we lost it
+        if nsView.window?.firstResponder !== nsView {
+            DispatchQueue.main.async {
+                nsView.window?.makeFirstResponder(nsView)
+            }
+        }
     }
 }
 
@@ -155,6 +161,16 @@ class KeyEventView: NSView {
     weak var appState: AppState?
 
     override var acceptsFirstResponder: Bool { true }
+
+    override func mouseDown(with event: NSEvent) {
+        // Re-establish first responder when clicking anywhere in the window
+        window?.makeFirstResponder(self)
+        super.mouseDown(with: event)
+    }
+
+    override func becomeFirstResponder() -> Bool {
+        return true
+    }
 
     override func keyDown(with event: NSEvent) {
         guard let appState = appState else {

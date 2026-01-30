@@ -167,7 +167,6 @@ struct NormalTimelineContent: View {
     var body: some View {
         GeometryReader { geometry in
             let contentWidth = max(geometry.size.width * appState.timelineZoom, geometry.size.width)
-            let viewportWidth = geometry.size.width
 
             ScrollViewReader { scrollProxy in
                 ScrollView(.horizontal, showsIndicators: true) {
@@ -189,7 +188,7 @@ struct NormalTimelineContent: View {
                             )
                         }
 
-                        // Region status bars at bottom (green for kept, red for binned) - drawn at same level as playhead
+                        // Region status bars at bottom (green for kept, red for binned)
                         if appState.duration > 0 {
                             VStack {
                                 Spacer()
@@ -205,7 +204,7 @@ struct NormalTimelineContent: View {
                             .frame(height: geometry.size.height)
                         }
 
-                        // Region dividers (yellow vertical lines at trim points) - drawn at same level as playhead
+                        // Region dividers (yellow vertical lines at trim points)
                         if appState.regions.count > 1 && appState.duration > 0 {
                             ForEach(appState.regions.dropLast()) { region in
                                 let x = (region.endTime / appState.duration) * contentWidth
@@ -216,7 +215,7 @@ struct NormalTimelineContent: View {
                             }
                         }
 
-                        // Playhead with ID for scrolling
+                        // Playhead
                         if appState.duration > 0 {
                             let playheadX = (appState.currentTime / appState.duration) * contentWidth
 
@@ -224,8 +223,17 @@ struct NormalTimelineContent: View {
                                 .fill(Color.red)
                                 .frame(width: 2, height: geometry.size.height)
                                 .position(x: playheadX, y: geometry.size.height / 2)
-                                .id("playhead")
                         }
+
+                        // Invisible anchor views for scrolling - on top but non-interactive
+                        HStack(spacing: 0) {
+                            ForEach(0..<100, id: \.self) { index in
+                                Color.clear
+                                    .frame(width: contentWidth / 100)
+                                    .id("segment\(index)")
+                            }
+                        }
+                        .allowsHitTesting(false)
                     }
                     .frame(width: contentWidth, height: geometry.size.height)
                     .contentShape(Rectangle())
@@ -247,18 +255,21 @@ struct NormalTimelineContent: View {
                         }
                     }
                 }
-                .onChange(of: appState.currentTime) { _, _ in
+                .onChange(of: appState.currentTime) { _, newTime in
                     if appState.capturePlayheadEnabled && appState.duration > 0 {
+                        let position = newTime / appState.duration
+                        let segmentIndex = min(99, max(0, Int(position * 100)))
                         withAnimation(.linear(duration: 0.1)) {
-                            scrollProxy.scrollTo("playhead", anchor: .center)
+                            scrollProxy.scrollTo("segment\(segmentIndex)", anchor: .center)
                         }
                     }
                 }
                 .onChange(of: appState.capturePlayheadEnabled) { _, newValue in
-                    // Scroll to playhead immediately when enabling capture
                     if newValue && appState.duration > 0 {
+                        let position = appState.currentTime / appState.duration
+                        let segmentIndex = min(99, max(0, Int(position * 100)))
                         withAnimation(.easeInOut(duration: 0.3)) {
-                            scrollProxy.scrollTo("playhead", anchor: .center)
+                            scrollProxy.scrollTo("segment\(segmentIndex)", anchor: .center)
                         }
                     }
                 }
@@ -313,7 +324,7 @@ struct PreviewTimelineContent: View {
                             )
                         }
 
-                        // Region dividers between kept regions (green vertical lines) - drawn at same level as playhead
+                        // Region dividers between kept regions (green vertical lines)
                         if keptRegions.count > 1 && previewDuration > 0 {
                             ForEach(Array(keptRegions.dropLast().enumerated()), id: \.element.id) { index, _ in
                                 let previewTime = keptRegions.prefix(index + 1).reduce(0) { $0 + $1.duration }
@@ -334,8 +345,17 @@ struct PreviewTimelineContent: View {
                                 .fill(Color.red)
                                 .frame(width: 2, height: geometry.size.height)
                                 .position(x: playheadX, y: geometry.size.height / 2)
-                                .id("previewPlayhead")
                         }
+
+                        // Invisible anchor views for scrolling - on top but non-interactive
+                        HStack(spacing: 0) {
+                            ForEach(0..<100, id: \.self) { index in
+                                Color.clear
+                                    .frame(width: contentWidth / 100)
+                                    .id("previewSegment\(index)")
+                            }
+                        }
+                        .allowsHitTesting(false)
                     }
                     .frame(width: contentWidth, height: geometry.size.height)
                     .contentShape(Rectangle())
@@ -361,16 +381,21 @@ struct PreviewTimelineContent: View {
                 }
                 .onChange(of: appState.currentTime) { _, _ in
                     if appState.capturePlayheadEnabled && previewDuration > 0 {
+                        let previewTime = convertToPreviewTime(appState.currentTime)
+                        let position = previewTime / previewDuration
+                        let segmentIndex = min(99, max(0, Int(position * 100)))
                         withAnimation(.linear(duration: 0.1)) {
-                            scrollProxy.scrollTo("previewPlayhead", anchor: .center)
+                            scrollProxy.scrollTo("previewSegment\(segmentIndex)", anchor: .center)
                         }
                     }
                 }
                 .onChange(of: appState.capturePlayheadEnabled) { _, newValue in
-                    // Scroll to playhead immediately when enabling capture
                     if newValue && previewDuration > 0 {
+                        let previewTime = convertToPreviewTime(appState.currentTime)
+                        let position = previewTime / previewDuration
+                        let segmentIndex = min(99, max(0, Int(position * 100)))
                         withAnimation(.easeInOut(duration: 0.3)) {
-                            scrollProxy.scrollTo("previewPlayhead", anchor: .center)
+                            scrollProxy.scrollTo("previewSegment\(segmentIndex)", anchor: .center)
                         }
                     }
                 }
@@ -894,8 +919,8 @@ struct WaveformStripView: View {
         generationTask = Task {
             do {
                 // Use rough waveform for faster initial display
-                // Sample count based on pixels - roughly 1 sample per 4 pixels
-                let samplesNeeded = max(100, Int(width / 4))
+                // Sample count based on pixels - roughly 1 sample per 2 pixels
+                let samplesNeeded = max(200, Int(width / 2))
                 let data = try await WaveformGenerator.generateRoughWaveform(
                     from: url,
                     totalSamples: samplesNeeded
@@ -1010,7 +1035,7 @@ struct PreviewWaveformStripView: View {
         Task {
             do {
                 // Use rough waveform for faster display
-                let samplesNeeded = max(100, Int(width / 4))
+                let samplesNeeded = max(200, Int(width / 2))
                 let fullData = try await WaveformGenerator.generateRoughWaveform(
                     from: url,
                     totalSamples: samplesNeeded
