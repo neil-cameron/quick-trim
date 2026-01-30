@@ -848,12 +848,12 @@ struct WaveformStripView: View {
 
         generationTask = Task {
             do {
-                // Calculate samples based on width - more samples for wider views
-                let samplesNeeded = max(100, Int(width / 2))  // At least 100 samples
-                let samplesPerSecond = max(50, samplesNeeded / max(1, Int(appState.duration)))
-                let data = try await WaveformGenerator.generateWaveform(
+                // Use rough waveform for faster initial display
+                // Sample count based on pixels - roughly 1 sample per 4 pixels
+                let samplesNeeded = max(100, Int(width / 4))
+                let data = try await WaveformGenerator.generateRoughWaveform(
                     from: url,
-                    samplesPerSecond: samplesPerSecond
+                    totalSamples: samplesNeeded
                 )
                 if !Task.isCancelled {
                     await MainActor.run {
@@ -964,14 +964,32 @@ struct PreviewWaveformStripView: View {
 
         Task {
             do {
-                // Generate waveform for kept regions only
-                let data = try await WaveformGenerator.generateWaveform(
+                // Use rough waveform for faster display
+                let samplesNeeded = max(100, Int(width / 4))
+                let fullData = try await WaveformGenerator.generateRoughWaveform(
                     from: url,
-                    forRegions: keptRegions,
-                    samplesPerSecond: 100
+                    totalSamples: samplesNeeded
                 )
+
+                // Extract samples for kept regions only
+                var previewSamples: [Float] = []
+                let samplesPerSecondActual = Double(fullData.samples.count) / fullData.duration
+
+                for region in keptRegions {
+                    let startIndex = Int(region.startTime * samplesPerSecondActual)
+                    let endIndex = Int(region.endTime * samplesPerSecondActual)
+                    let clampedStart = max(0, min(startIndex, fullData.samples.count - 1))
+                    let clampedEnd = max(0, min(endIndex, fullData.samples.count))
+
+                    if clampedStart < clampedEnd {
+                        previewSamples.append(contentsOf: fullData.samples[clampedStart..<clampedEnd])
+                    }
+                }
+
+                let previewData = WaveformData(samples: previewSamples, duration: previewDuration)
+
                 await MainActor.run {
-                    self.waveformData = data
+                    self.waveformData = previewData
                 }
             } catch {
                 print("Preview waveform generation failed: \(error)")

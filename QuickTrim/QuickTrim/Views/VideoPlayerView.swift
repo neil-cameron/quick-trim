@@ -194,9 +194,10 @@ struct AudioVisualizationView: View {
 
         Task {
             do {
-                let data = try await WaveformGenerator.generateWaveform(
+                // Use rough waveform for faster loading - same method as timeline for consistency
+                let data = try await WaveformGenerator.generateRoughWaveform(
                     from: url,
-                    samplesPerSecond: 200  // Higher resolution for player view
+                    totalSamples: 400  // Reasonable resolution for player view
                 )
                 await MainActor.run {
                     self.waveformData = data

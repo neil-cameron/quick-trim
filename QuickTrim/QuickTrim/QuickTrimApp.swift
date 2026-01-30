@@ -13,7 +13,7 @@ struct QuickTrimApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
 
     var body: some Scene {
-        WindowGroup {
+        WindowGroup(id: "document") {
             DocumentWindowView()
                 .frame(minWidth: 900, minHeight: 600)
         }
@@ -155,11 +155,8 @@ struct QuickTrimApp: App {
     }
 
     private func openNewWindow() {
-        if let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: Bundle.main.bundleIdentifier!) {
-            let configuration = NSWorkspace.OpenConfiguration()
-            configuration.createsNewApplicationInstance = false
-            NSWorkspace.shared.openApplication(at: url, configuration: configuration)
-        }
+        // Use the stored openWindow action from the active view
+        WindowManager.shared.openNewWindow()
     }
 
     private func getFocusedAppState() -> AppState? {
@@ -184,6 +181,18 @@ struct QuickTrimApp: App {
     }
 }
 
+// Singleton to manage window creation from menu commands
+class WindowManager {
+    static let shared = WindowManager()
+    var openWindowAction: (() -> Void)?
+
+    func openNewWindow() {
+        if let action = openWindowAction {
+            action()
+        }
+    }
+}
+
 // Custom hosting view to store AppState reference
 class DocumentHostingView: NSView {
     var appState: AppState?
@@ -192,6 +201,7 @@ class DocumentHostingView: NSView {
 // Wrapper view that creates a unique AppState per window
 struct DocumentWindowView: View {
     @StateObject private var appState = AppState()
+    @Environment(\.openWindow) private var openWindow
 
     var body: some View {
         ContentView()
@@ -201,6 +211,12 @@ struct DocumentWindowView: View {
             )
             .onOpenURL { url in
                 appState.openVideo(url: url)
+            }
+            .onAppear {
+                // Register the openWindow action for menu commands
+                WindowManager.shared.openWindowAction = { [openWindow] in
+                    openWindow(id: "document")
+                }
             }
     }
 }
@@ -255,22 +271,18 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         // Store URL for new window
         pendingURL = url
 
-        // Open new window
-        if let appURL = NSWorkspace.shared.urlForApplication(withBundleIdentifier: Bundle.main.bundleIdentifier!) {
-            let configuration = NSWorkspace.OpenConfiguration()
-            configuration.createsNewApplicationInstance = false
-            NSWorkspace.shared.openApplication(at: appURL, configuration: configuration) { _, _ in
-                // After window opens, load the URL
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
-                    if let url = self.pendingURL,
-                       let window = NSApp.keyWindow,
-                       let contentView = window.contentView,
-                       let hostingView = self.findHostingView(in: contentView),
-                       let appState = hostingView.appState {
-                        appState.openVideo(url: url)
-                        self.pendingURL = nil
-                    }
-                }
+        // Open new window using WindowManager
+        WindowManager.shared.openNewWindow()
+
+        // After window opens, load the URL
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+            if let url = self.pendingURL,
+               let window = NSApp.keyWindow,
+               let contentView = window.contentView,
+               let hostingView = self.findHostingView(in: contentView),
+               let appState = hostingView.appState {
+                appState.openVideo(url: url)
+                self.pendingURL = nil
             }
         }
     }

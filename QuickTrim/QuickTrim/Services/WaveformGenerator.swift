@@ -31,6 +31,147 @@ enum WaveformError: LocalizedError {
 
 class WaveformGenerator {
 
+    /// Fast rough waveform generation using streaming with skip
+    /// Reads file sequentially but only processes a fraction of the audio data
+    /// - Parameters:
+    ///   - url: Source file URL
+    ///   - totalSamples: Total number of output samples to generate
+    /// - Returns: WaveformData containing normalized samples
+    static func generateRoughWaveform(
+        from url: URL,
+        totalSamples: Int = 200
+    ) async throws -> WaveformData {
+        let asset = AVURLAsset(url: url)
+
+        // Load audio track
+        let audioTracks = try await asset.loadTracks(withMediaType: .audio)
+        guard let audioTrack = audioTracks.first else {
+            throw WaveformError.noAudioTrack
+        }
+
+        // Get duration
+        let duration = try await asset.load(.duration)
+        let durationSeconds = CMTimeGetSeconds(duration)
+
+        guard durationSeconds > 0 else {
+            return WaveformData(samples: [], duration: 0)
+        }
+
+        // Create asset reader
+        let reader = try AVAssetReader(asset: asset)
+
+        // Configure output settings for PCM
+        let outputSettings: [String: Any] = [
+            AVFormatIDKey: kAudioFormatLinearPCM,
+            AVLinearPCMBitDepthKey: 16,
+            AVLinearPCMIsBigEndianKey: false,
+            AVLinearPCMIsFloatKey: false,
+            AVLinearPCMIsNonInterleaved: false
+        ]
+
+        let output = AVAssetReaderTrackOutput(
+            track: audioTrack,
+            outputSettings: outputSettings
+        )
+        reader.add(output)
+
+        guard reader.startReading() else {
+            throw WaveformError.readingFailed
+        }
+
+        // Estimate total samples based on typical 44.1kHz stereo
+        let estimatedSampleRate = 44100
+        let estimatedTotalSamples = Int(durationSeconds * Double(estimatedSampleRate) * 2) // stereo
+
+        // Calculate how many raw samples per output bucket
+        let samplesPerBucket = max(1, estimatedTotalSamples / totalSamples)
+
+        // We'll skip most buffers and only process every Nth sample
+        var waveformSamples: [Float] = []
+        waveformSamples.reserveCapacity(totalSamples)
+
+        var totalSamplesRead = 0
+        var currentBucketMax: Int16 = 0
+        var samplesInCurrentBucket = 0
+        let skipFactor = max(1, samplesPerBucket / 100) // Only check every Nth sample for peak
+
+        while let sampleBuffer = output.copyNextSampleBuffer() {
+            guard let blockBuffer = CMSampleBufferGetDataBuffer(sampleBuffer) else {
+                continue
+            }
+
+            var length = 0
+            var dataPointer: UnsafeMutablePointer<Int8>?
+            let status = CMBlockBufferGetDataPointer(
+                blockBuffer,
+                atOffset: 0,
+                lengthAtOffsetOut: nil,
+                totalLengthOut: &length,
+                dataPointerOut: &dataPointer
+            )
+
+            guard status == kCMBlockBufferNoErr, let dataPointer = dataPointer else {
+                continue
+            }
+
+            let sampleCount = length / MemoryLayout<Int16>.size
+            dataPointer.withMemoryRebound(to: Int16.self, capacity: sampleCount) { pointer in
+                // Process samples with skip factor for speed
+                var j = 0
+                while j < sampleCount {
+                    let absSample = abs(pointer[j])
+                    if absSample > currentBucketMax {
+                        currentBucketMax = absSample
+                    }
+
+                    samplesInCurrentBucket += skipFactor
+                    totalSamplesRead += skipFactor
+
+                    // Check if we've filled a bucket
+                    if samplesInCurrentBucket >= samplesPerBucket {
+                        let normalized = Float(currentBucketMax) / Float(Int16.max)
+                        waveformSamples.append(normalized)
+                        currentBucketMax = 0
+                        samplesInCurrentBucket = 0
+
+                        // Stop if we have enough samples
+                        if waveformSamples.count >= totalSamples {
+                            break
+                        }
+                    }
+
+                    j += skipFactor
+                }
+            }
+
+            // Stop early if we have enough samples
+            if waveformSamples.count >= totalSamples {
+                break
+            }
+        }
+
+        // Add final bucket if there's remaining data
+        if samplesInCurrentBucket > 0 && waveformSamples.count < totalSamples {
+            let normalized = Float(currentBucketMax) / Float(Int16.max)
+            waveformSamples.append(normalized)
+        }
+
+        reader.cancelReading()
+
+        // Pad or trim to exact count
+        while waveformSamples.count < totalSamples {
+            waveformSamples.append(waveformSamples.last ?? 0)
+        }
+        if waveformSamples.count > totalSamples {
+            waveformSamples = Array(waveformSamples.prefix(totalSamples))
+        }
+
+        return WaveformData(
+            samples: waveformSamples,
+            duration: durationSeconds
+        )
+    }
+
     /// Generate waveform samples from an audio/video file
     /// - Parameters:
     ///   - url: Source file URL
