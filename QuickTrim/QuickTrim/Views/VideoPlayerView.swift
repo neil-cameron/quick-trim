@@ -16,10 +16,7 @@ struct VideoPlayerView: View {
                     // Show waveform visualization for audio files
                     AudioVisualizationView()
                 } else {
-                    VideoPlayer(player: player)
-                        .onAppear {
-                            // Ensure video controls are visible
-                        }
+                    AVPlayerContainerView(player: player)
                 }
             } else {
                 Rectangle()
@@ -101,6 +98,24 @@ struct VideoPlayerView: View {
             return String(format: "%02d:%02d:%02d:%02d", hours, minutes, seconds, frames)
         } else {
             return String(format: "%02d:%02d:%02d", minutes, seconds, frames)
+        }
+    }
+}
+
+struct AVPlayerContainerView: NSViewRepresentable {
+    let player: AVPlayer
+
+    func makeNSView(context: Context) -> AVPlayerView {
+        let view = AVPlayerView()
+        view.controlsStyle = .floating
+        view.videoGravity = .resizeAspect
+        view.player = player
+        return view
+    }
+
+    func updateNSView(_ nsView: AVPlayerView, context: Context) {
+        if nsView.player !== player {
+            nsView.player = player
         }
     }
 }
