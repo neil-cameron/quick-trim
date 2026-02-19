@@ -822,8 +822,8 @@ struct WaveformStripView: View {
     @EnvironmentObject var appState: AppState
     @State private var waveformData: WaveformData?
     @State private var lastGeneratedURL: URL?
-    @State private var lastGeneratedWidth: CGFloat = 0
     @State private var generationTask: Task<Void, Never>?
+    @State private var debounceTask: Task<Void, Never>?
 
     let width: CGFloat
     let height: CGFloat
@@ -846,41 +846,40 @@ struct WaveformStripView: View {
         }
         .frame(width: width, height: height)
         .onAppear {
-            loadWaveformIfNeeded()
+            scheduleGeneration(urlChanged: true)
         }
         .onChange(of: appState.videoURL) { _, _ in
             lastGeneratedURL = nil
             waveformData = nil
-            loadWaveformIfNeeded()
+            scheduleGeneration(urlChanged: true)
         }
         .onChange(of: width) { _, _ in
-            loadWaveformIfNeeded()
+            scheduleGeneration(urlChanged: false)
         }
     }
 
-    private func loadWaveformIfNeeded() {
+    private func scheduleGeneration(urlChanged: Bool) {
+        debounceTask?.cancel()
+        debounceTask = Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 50_000_000) // 50ms debounce
+            if !Task.isCancelled {
+                loadWaveform()
+            }
+        }
+    }
+
+    private func loadWaveform() {
         guard let url = appState.videoURL, appState.duration > 0 else { return }
-
-        let urlChanged = url != lastGeneratedURL
-        let widthChanged = abs(width - lastGeneratedWidth) > 20
-
-        // Always regenerate if we have no data (previous attempt may have been cancelled)
-        let needsData = waveformData == nil
-
-        guard urlChanged || widthChanged || needsData else { return }
 
         // Cancel any in-flight generation
         generationTask?.cancel()
 
         lastGeneratedURL = url
-        // Don't update lastGeneratedWidth yet — only on successful completion.
-        // This prevents a cancelled task from blocking future regeneration attempts.
         let capturedWidth = width
+        let capturedDuration = appState.duration
 
         generationTask = Task {
             do {
-                // Use rough waveform for faster initial display
-                // Sample count based on pixels - roughly 1 sample per 2 pixels
                 let samplesNeeded = max(200, Int(capturedWidth / 2))
                 let data = try await WaveformGenerator.generateRoughWaveform(
                     from: url,
@@ -889,16 +888,13 @@ struct WaveformStripView: View {
                 if !Task.isCancelled {
                     await MainActor.run {
                         self.waveformData = data
-                        self.lastGeneratedWidth = capturedWidth
                     }
                 }
             } catch {
                 if !Task.isCancelled {
                     print("Waveform generation failed: \(error)")
-                    // Set empty waveform to clear spinner
                     await MainActor.run {
-                        self.waveformData = WaveformData(samples: [0], duration: appState.duration)
-                        self.lastGeneratedWidth = capturedWidth
+                        self.waveformData = WaveformData(samples: [0], duration: capturedDuration)
                     }
                 }
             }
@@ -949,9 +945,8 @@ struct TimelineWaveformCanvas: View {
 struct PreviewWaveformStripView: View {
     @EnvironmentObject var appState: AppState
     @State private var waveformData: WaveformData?
-    @State private var lastKeptRegionIds: [UUID] = []
-    @State private var lastGeneratedWidth: CGFloat = 0
     @State private var generationTask: Task<Void, Never>?
+    @State private var debounceTask: Task<Void, Never>?
 
     let keptRegions: [Region]
     let previewDuration: Double
@@ -974,39 +969,42 @@ struct PreviewWaveformStripView: View {
         }
         .frame(width: width, height: height)
         .onAppear {
-            generatePreviewWaveform(force: true)
+            scheduleGeneration()
         }
         .onChange(of: keptRegions.map { $0.id }) { _, _ in
-            generatePreviewWaveform()
+            scheduleGeneration()
         }
         .onChange(of: width) { _, _ in
-            generatePreviewWaveform()
+            scheduleGeneration()
         }
     }
 
-    private func generatePreviewWaveform(force: Bool = false) {
+    /// Debounce rapid calls (e.g. from onAppear + onChange firing together)
+    /// so only one generation task runs after things settle.
+    private func scheduleGeneration() {
+        debounceTask?.cancel()
+        debounceTask = Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 50_000_000) // 50ms debounce
+            if !Task.isCancelled {
+                generatePreviewWaveform()
+            }
+        }
+    }
+
+    private func generatePreviewWaveform() {
         guard let url = appState.videoURL,
               previewDuration > 0 else {
-            waveformData = nil
             return
         }
 
-        let currentIds = keptRegions.map { $0.id }
-        let idsChanged = currentIds != lastKeptRegionIds
-        let widthChanged = abs(width - lastGeneratedWidth) > 20
-        // Always regenerate if we have no data (previous attempt may have been cancelled)
-        let needsData = waveformData == nil
-
-        guard force || idsChanged || widthChanged || needsData else { return }
-
-        lastKeptRegionIds = currentIds
-        // Don't update lastGeneratedWidth yet — only on successful completion
-        let capturedWidth = width
-
+        // Cancel any in-flight generation
         generationTask?.cancel()
+        let capturedWidth = width
+        let capturedRegions = keptRegions
+        let capturedPreviewDuration = previewDuration
+
         generationTask = Task {
             do {
-                // Use rough waveform for faster display
                 let samplesNeeded = max(200, Int(capturedWidth / 2))
                 let fullData = try await WaveformGenerator.generateRoughWaveform(
                     from: url,
@@ -1019,7 +1017,7 @@ struct PreviewWaveformStripView: View {
                 var previewSamples: [Float] = []
                 let samplesPerSecondActual = Double(fullData.samples.count) / fullData.duration
 
-                for region in keptRegions {
+                for region in capturedRegions {
                     let startIndex = Int(region.startTime * samplesPerSecondActual)
                     let endIndex = Int(region.endTime * samplesPerSecondActual)
                     let clampedStart = max(0, min(startIndex, fullData.samples.count - 1))
@@ -1032,19 +1030,19 @@ struct PreviewWaveformStripView: View {
 
                 if Task.isCancelled { return }
 
-                // Always set waveform data even if samples are empty (prevents infinite spinner)
-                let previewData = WaveformData(samples: previewSamples.isEmpty ? [0] : previewSamples, duration: previewDuration)
+                let previewData = WaveformData(
+                    samples: previewSamples.isEmpty ? [0] : previewSamples,
+                    duration: capturedPreviewDuration
+                )
 
                 await MainActor.run {
                     self.waveformData = previewData
-                    self.lastGeneratedWidth = capturedWidth
                 }
             } catch {
                 if !Task.isCancelled {
                     print("Preview waveform generation failed: \(error)")
                     await MainActor.run {
-                        self.waveformData = WaveformData(samples: [0], duration: previewDuration)
-                        self.lastGeneratedWidth = capturedWidth
+                        self.waveformData = WaveformData(samples: [0], duration: capturedPreviewDuration)
                     }
                 }
             }
