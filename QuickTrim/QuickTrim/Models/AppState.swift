@@ -110,8 +110,9 @@ class AppState: ObservableObject {
     private var skimStopTask: Task<Void, Never>?
     @Published var isSkimming: Bool = false
 
-    // Pending seek target — set by seekToStart so togglePlayPause can use
-    // the intended position even if AVPlayer hasn't finished seeking yet
+    // Set by seekToStart so togglePlayPause always seek-then-plays from
+    // the intended position, avoiding AVPlayer race conditions.
+    // Cleared only by togglePlayPause after it has used the value.
     private var pendingSeekTime: Double?
 
     init() {}
@@ -293,8 +294,20 @@ class AppState: ObservableObject {
             player?.pause()
         } else {
             guard let player = player else { return }
-            // Use pending seek target if available (seek may not have completed yet)
-            let actualTime = pendingSeekTime ?? CMTimeGetSeconds(player.currentTime())
+
+            // If seekToStart set a pending target, always seek-then-play from there.
+            // This is the primary path after pressing Home — guarantees instant playback.
+            if let seekTarget = pendingSeekTime {
+                pendingSeekTime = nil
+                let cmTime = CMTime(seconds: seekTarget, preferredTimescale: 600)
+                player.seek(to: cmTime, toleranceBefore: .zero, toleranceAfter: .zero) { [weak self] finished in
+                    guard finished else { return }
+                    self?.player?.play()
+                }
+                return
+            }
+
+            let actualTime = CMTimeGetSeconds(player.currentTime())
 
             // Determine the valid playback end point
             let endTime: Double
@@ -313,7 +326,8 @@ class AppState: ObservableObject {
                     startTime = 0
                 }
                 let cmTime = CMTime(seconds: startTime, preferredTimescale: 600)
-                player.seek(to: cmTime, toleranceBefore: .zero, toleranceAfter: .zero) { [weak self] _ in
+                player.seek(to: cmTime, toleranceBefore: .zero, toleranceAfter: .zero) { [weak self] finished in
+                    guard finished else { return }
                     self?.player?.play()
                 }
                 return
@@ -329,13 +343,15 @@ class AppState: ObservableObject {
                     // Find the next kept region
                     if let nextKept = keptRegions.first(where: { $0.startTime >= actualTime - Self.timeTolerance }) {
                         let cmTime = CMTime(seconds: nextKept.startTime, preferredTimescale: 600)
-                        player.seek(to: cmTime, toleranceBefore: .zero, toleranceAfter: .zero) { [weak self] _ in
+                        player.seek(to: cmTime, toleranceBefore: .zero, toleranceAfter: .zero) { [weak self] finished in
+                            guard finished else { return }
                             self?.player?.play()
                         }
                         return
                     } else if let firstKept = keptRegions.first {
                         let cmTime = CMTime(seconds: firstKept.startTime, preferredTimescale: 600)
-                        player.seek(to: cmTime, toleranceBefore: .zero, toleranceAfter: .zero) { [weak self] _ in
+                        player.seek(to: cmTime, toleranceBefore: .zero, toleranceAfter: .zero) { [weak self] finished in
+                            guard finished else { return }
                             self?.player?.play()
                         }
                         return
@@ -343,16 +359,7 @@ class AppState: ObservableObject {
                 }
             }
 
-            // If there's a pending seek, ensure we seek-then-play to avoid race
-            if let seekTarget = pendingSeekTime {
-                pendingSeekTime = nil
-                let cmTime = CMTime(seconds: seekTarget, preferredTimescale: 600)
-                player.seek(to: cmTime, toleranceBefore: .zero, toleranceAfter: .zero) { [weak self] _ in
-                    self?.player?.play()
-                }
-            } else {
-                player.play()
-            }
+            player.play()
         }
     }
 
@@ -429,13 +436,12 @@ class AppState: ObservableObject {
             targetTime = 0
         }
 
-        // Store pending target so togglePlayPause knows where we're headed
+        // Store pending target so togglePlayPause always seek-then-plays.
+        // Do NOT clear it in the seek completion — only togglePlayPause clears it.
         pendingSeekTime = targetTime
         currentTime = targetTime  // Update UI immediately
 
-        seek(to: targetTime) { [weak self] _ in
-            self?.pendingSeekTime = nil
-        }
+        seek(to: targetTime)
     }
 
     // Handle preview mode playback - skip binned regions

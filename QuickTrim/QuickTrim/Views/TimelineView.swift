@@ -656,17 +656,19 @@ struct ThumbnailStripView: View {
         let widthChanged = abs(width - lastGeneratedWidth) > 20
         let urlChanged = url != lastGeneratedURL
         let durationChanged = lastGeneratedDuration == 0 && appState.duration > 0
+        let needsData = thumbnails.isEmpty
 
-        guard urlChanged || widthChanged || durationChanged else { return }
+        guard urlChanged || widthChanged || durationChanged || needsData else { return }
 
         lastGeneratedURL = url
-        lastGeneratedWidth = width
         lastGeneratedDuration = appState.duration
+        // Don't update lastGeneratedWidth yet — only on successful completion
+        let capturedWidth = width
 
-        generateThumbnails(url: url)
+        generateThumbnails(url: url, capturedWidth: capturedWidth)
     }
 
-    private func generateThumbnails(url: URL) {
+    private func generateThumbnails(url: URL, capturedWidth: CGFloat) {
         generationTask?.cancel()
 
         let asset = AVAsset(url: url)
@@ -674,7 +676,7 @@ struct ThumbnailStripView: View {
         imageGenerator.appliesPreferredTrackTransform = true
         imageGenerator.maximumSize = CGSize(width: thumbnailWidth * 2, height: height * 2)
 
-        let numberOfThumbnails = Int(ceil(width / thumbnailWidth))
+        let numberOfThumbnails = Int(ceil(capturedWidth / thumbnailWidth))
         guard numberOfThumbnails > 0 && appState.duration > 0 else { return }
 
         let interval = appState.duration / Double(numberOfThumbnails)
@@ -701,6 +703,7 @@ struct ThumbnailStripView: View {
             if !Task.isCancelled {
                 await MainActor.run {
                     self.thumbnails = newThumbnails
+                    self.lastGeneratedWidth = capturedWidth
                 }
             }
         }
@@ -753,16 +756,18 @@ struct PreviewThumbnailStripView: View {
         let currentIds = keptRegions.map { $0.id }
         let idsChanged = currentIds != lastKeptRegionIds
         let widthChanged = abs(width - lastGeneratedWidth) > 20
+        let needsData = thumbnails.isEmpty
 
-        guard idsChanged || widthChanged else { return }
+        guard idsChanged || widthChanged || needsData else { return }
 
         lastKeptRegionIds = currentIds
-        lastGeneratedWidth = width
+        // Don't update lastGeneratedWidth yet — only on successful completion
+        let capturedWidth = width
 
-        generateThumbnails(url: url)
+        generateThumbnails(url: url, capturedWidth: capturedWidth)
     }
 
-    private func generateThumbnails(url: URL) {
+    private func generateThumbnails(url: URL, capturedWidth: CGFloat) {
         generationTask?.cancel()
 
         guard previewDuration > 0 else {
@@ -775,7 +780,7 @@ struct PreviewThumbnailStripView: View {
         imageGenerator.appliesPreferredTrackTransform = true
         imageGenerator.maximumSize = CGSize(width: thumbnailWidth * 2, height: height * 2)
 
-        let numberOfThumbnails = Int(ceil(width / thumbnailWidth))
+        let numberOfThumbnails = Int(ceil(capturedWidth / thumbnailWidth))
         guard numberOfThumbnails > 0 else { return }
 
         let interval = previewDuration / Double(numberOfThumbnails)
@@ -804,6 +809,7 @@ struct PreviewThumbnailStripView: View {
             if !Task.isCancelled {
                 await MainActor.run {
                     self.thumbnails = newThumbnails
+                    self.lastGeneratedWidth = capturedWidth
                 }
             }
         }
@@ -858,19 +864,24 @@ struct WaveformStripView: View {
         let urlChanged = url != lastGeneratedURL
         let widthChanged = abs(width - lastGeneratedWidth) > 20
 
-        guard urlChanged || widthChanged else { return }
+        // Always regenerate if we have no data (previous attempt may have been cancelled)
+        let needsData = waveformData == nil
+
+        guard urlChanged || widthChanged || needsData else { return }
 
         // Cancel any in-flight generation
         generationTask?.cancel()
 
         lastGeneratedURL = url
-        lastGeneratedWidth = width
+        // Don't update lastGeneratedWidth yet — only on successful completion.
+        // This prevents a cancelled task from blocking future regeneration attempts.
+        let capturedWidth = width
 
         generationTask = Task {
             do {
                 // Use rough waveform for faster initial display
                 // Sample count based on pixels - roughly 1 sample per 2 pixels
-                let samplesNeeded = max(200, Int(width / 2))
+                let samplesNeeded = max(200, Int(capturedWidth / 2))
                 let data = try await WaveformGenerator.generateRoughWaveform(
                     from: url,
                     totalSamples: samplesNeeded
@@ -878,6 +889,7 @@ struct WaveformStripView: View {
                 if !Task.isCancelled {
                     await MainActor.run {
                         self.waveformData = data
+                        self.lastGeneratedWidth = capturedWidth
                     }
                 }
             } catch {
@@ -886,6 +898,7 @@ struct WaveformStripView: View {
                     // Set empty waveform to clear spinner
                     await MainActor.run {
                         self.waveformData = WaveformData(samples: [0], duration: appState.duration)
+                        self.lastGeneratedWidth = capturedWidth
                     }
                 }
             }
@@ -981,17 +994,20 @@ struct PreviewWaveformStripView: View {
         let currentIds = keptRegions.map { $0.id }
         let idsChanged = currentIds != lastKeptRegionIds
         let widthChanged = abs(width - lastGeneratedWidth) > 20
+        // Always regenerate if we have no data (previous attempt may have been cancelled)
+        let needsData = waveformData == nil
 
-        guard force || idsChanged || widthChanged else { return }
+        guard force || idsChanged || widthChanged || needsData else { return }
 
         lastKeptRegionIds = currentIds
-        lastGeneratedWidth = width
+        // Don't update lastGeneratedWidth yet — only on successful completion
+        let capturedWidth = width
 
         generationTask?.cancel()
         generationTask = Task {
             do {
                 // Use rough waveform for faster display
-                let samplesNeeded = max(200, Int(width / 2))
+                let samplesNeeded = max(200, Int(capturedWidth / 2))
                 let fullData = try await WaveformGenerator.generateRoughWaveform(
                     from: url,
                     totalSamples: samplesNeeded
@@ -1021,12 +1037,14 @@ struct PreviewWaveformStripView: View {
 
                 await MainActor.run {
                     self.waveformData = previewData
+                    self.lastGeneratedWidth = capturedWidth
                 }
             } catch {
                 if !Task.isCancelled {
                     print("Preview waveform generation failed: \(error)")
                     await MainActor.run {
                         self.waveformData = WaveformData(samples: [0], duration: previewDuration)
+                        self.lastGeneratedWidth = capturedWidth
                     }
                 }
             }
