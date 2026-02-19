@@ -9,6 +9,9 @@ import Combine
 import UniformTypeIdentifiers
 
 class AppState: ObservableObject {
+    /// Tolerance for time comparisons (seconds). Accounts for floating-point imprecision in seek operations.
+    static let timeTolerance: Double = 0.01
+
     // Media state
     @Published var videoURL: URL?
     @Published var player: AVPlayer?
@@ -109,6 +112,10 @@ class AppState: ObservableObject {
 
     init() {}
 
+    deinit {
+        cleanUp()
+    }
+
     func openVideo(url: URL) {
         // Clean up previous video
         cleanUp()
@@ -182,6 +189,7 @@ class AppState: ObservableObject {
     func cleanUp() {
         if let observer = timeObserver {
             player?.removeTimeObserver(observer)
+            timeObserver = nil
         }
         player?.pause()
         player = nil
@@ -219,7 +227,7 @@ class AppState: ObservableObject {
         let region = regions[regionIndex]
 
         // Don't split if we're at the start or end of the region
-        if abs(currentTime - region.startTime) < 0.01 || abs(currentTime - region.endTime) < 0.01 {
+        if abs(currentTime - region.startTime) < Self.timeTolerance || abs(currentTime - region.endTime) < Self.timeTolerance {
             return
         }
 
@@ -241,14 +249,14 @@ class AppState: ObservableObject {
     }
 
     func binRegionLeftOfPlayhead() {
-        guard let index = regions.lastIndex(where: { $0.endTime <= currentTime + 0.01 }) else { return }
+        guard let index = regions.lastIndex(where: { $0.endTime <= currentTime + Self.timeTolerance }) else { return }
 
         saveStateForUndo()
         regions[index].isBinned = true
     }
 
     func binRegionRightOfPlayhead() {
-        guard let index = regions.firstIndex(where: { $0.startTime >= currentTime - 0.01 }) else { return }
+        guard let index = regions.firstIndex(where: { $0.startTime >= currentTime - Self.timeTolerance }) else { return }
 
         saveStateForUndo()
         regions[index].isBinned = true
@@ -274,16 +282,41 @@ class AppState: ObservableObject {
         if isPlaying {
             player?.pause()
         } else {
+            guard let player = player else { return }
+            let actualTime = CMTimeGetSeconds(player.currentTime())
+
+            // Determine the valid playback end point
+            let endTime: Double
+            if previewModeEnabled {
+                endTime = keptRegions.last?.endTime ?? duration
+            } else {
+                endTime = duration
+            }
+
+            // If we're at or past the end, seek to start first, then play
+            if actualTime >= endTime - Self.timeTolerance {
+                let startTime: Double
+                if previewModeEnabled {
+                    startTime = keptRegions.first?.startTime ?? 0
+                } else {
+                    startTime = 0
+                }
+                let cmTime = CMTime(seconds: startTime, preferredTimescale: 600)
+                player.seek(to: cmTime, toleranceBefore: .zero, toleranceAfter: .zero) { [weak self] _ in
+                    self?.player?.play()
+                }
+                return
+            }
+
             // In preview mode, check if we need to jump to a kept region first
-            if previewModeEnabled, let player = player {
-                let actualTime = CMTimeGetSeconds(player.currentTime())
+            if previewModeEnabled {
                 let inBinnedRegion = regions.contains { region in
-                    region.isBinned && actualTime >= region.startTime - 0.01 && actualTime < region.endTime
+                    region.isBinned && actualTime >= region.startTime - Self.timeTolerance && actualTime < region.endTime
                 }
 
                 if inBinnedRegion {
                     // Find the next kept region
-                    if let nextKept = keptRegions.first(where: { $0.startTime >= actualTime - 0.01 }) {
+                    if let nextKept = keptRegions.first(where: { $0.startTime >= actualTime - Self.timeTolerance }) {
                         let cmTime = CMTime(seconds: nextKept.startTime, preferredTimescale: 600)
                         player.seek(to: cmTime, toleranceBefore: .zero, toleranceAfter: .zero) { [weak self] _ in
                             self?.player?.play()
@@ -298,13 +331,17 @@ class AppState: ObservableObject {
                     }
                 }
             }
-            player?.play()
+            player.play()
         }
     }
 
-    func seek(to time: Double) {
+    func seek(to time: Double, completion: ((Bool) -> Void)? = nil) {
         let cmTime = CMTime(seconds: max(0, min(time, duration)), preferredTimescale: 600)
-        player?.seek(to: cmTime, toleranceBefore: .zero, toleranceAfter: .zero)
+        if let completion = completion {
+            player?.seek(to: cmTime, toleranceBefore: .zero, toleranceAfter: .zero, completionHandler: completion)
+        } else {
+            player?.seek(to: cmTime, toleranceBefore: .zero, toleranceAfter: .zero)
+        }
     }
 
     /// Seek and briefly play audio for skimming feedback (FCP-style)
@@ -362,14 +399,17 @@ class AppState: ObservableObject {
     }
 
     func seekToStart() {
+        // Pause first so togglePlayPause sees correct state
+        player?.pause()
+
+        let targetTime: Double
         if previewModeEnabled {
-            // In preview mode, seek to start of first kept region
-            if let firstKept = keptRegions.first {
-                seek(to: firstKept.startTime)
-            }
+            targetTime = keptRegions.first?.startTime ?? 0
         } else {
-            seek(to: 0)
+            targetTime = 0
         }
+
+        seek(to: targetTime)
     }
 
     // Handle preview mode playback - skip binned regions
@@ -379,7 +419,7 @@ class AppState: ObservableObject {
 
         // Check if we're in a binned region
         let inBinnedRegion = regions.contains { region in
-            region.isBinned && currentTime >= region.startTime && currentTime < region.endTime
+            region.isBinned && currentTime >= region.startTime - Self.timeTolerance && currentTime < region.endTime
         }
 
         if inBinnedRegion {
@@ -396,7 +436,7 @@ class AppState: ObservableObject {
 
         // Check if we've reached the end of the last kept region
         if let lastKept = keptRegions.last {
-            if currentTime >= lastKept.endTime - 0.02 {
+            if currentTime >= lastKept.endTime - Self.timeTolerance {
                 player?.pause()
             }
         }
@@ -478,15 +518,16 @@ class AppState: ObservableObject {
         isExporting = true
         exportProgress = 0
 
-        Task {
+        Task.detached { [weak self] in
+            guard let self = self else { return }
             do {
                 let resultURL = try await VideoExporter.export(
                     sourceURL: sourceURL,
                     regions: keptRegions,
                     outputURL: outputURL,
-                    progressHandler: { [weak self] progress in
+                    progressHandler: { progress in
                         DispatchQueue.main.async {
-                            self?.exportProgress = progress
+                            self.exportProgress = progress
                         }
                     }
                 )

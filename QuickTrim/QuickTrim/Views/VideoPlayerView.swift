@@ -31,11 +31,7 @@ struct VideoPlayerView: View {
             HStack(spacing: 16) {
                 // Play/Pause button
                 Button(action: {
-                    if appState.isPlaying {
-                        appState.player?.pause()
-                    } else {
-                        appState.player?.play()
-                    }
+                    appState.togglePlayPause()
                 }) {
                     Image(systemName: appState.isPlaying ? "pause.fill" : "play.fill")
                         .font(.title2)
@@ -107,7 +103,7 @@ struct AVPlayerContainerView: NSViewRepresentable {
 
     func makeNSView(context: Context) -> AVPlayerView {
         let view = AVPlayerView()
-        view.controlsStyle = .floating
+        view.controlsStyle = .none
         view.videoGravity = .resizeAspect
         view.player = player
         return view
@@ -144,8 +140,6 @@ struct PlaybackSpeedPicker: View {
     private func speedLabel(_ speed: Float) -> String {
         if speed == 1.0 {
             return "1x"
-        } else if speed < 1.0 {
-            return String(format: "%.2gx", speed)
         } else {
             return String(format: "%.2gx", speed)
         }

@@ -5,7 +5,6 @@
 
 import Foundation
 import AVFoundation
-import Accelerate
 
 struct WaveformData {
     let samples: [Float]  // Normalized -1.0 to 1.0

@@ -290,17 +290,11 @@ struct PreviewTimelineContent: View {
     let timecodeHeight: CGFloat
     let playheadWidth: CGFloat
 
-    private var keptRegions: [Region] {
-        appState.regions.filter { !$0.isBinned }
-    }
-
-    private var previewDuration: Double {
-        keptRegions.reduce(0) { $0 + $1.duration }
-    }
-
     var body: some View {
         GeometryReader { geometry in
             let contentWidth = max(geometry.size.width * appState.timelineZoom, geometry.size.width)
+            let keptRegions = appState.keptRegions
+            let previewDuration = appState.previewDuration
 
             ScrollViewReader { scrollProxy in
                 ScrollView(.horizontal, showsIndicators: true) {
@@ -338,7 +332,7 @@ struct PreviewTimelineContent: View {
 
                         // Playhead in preview coordinates
                         if previewDuration > 0 {
-                            let previewTime = convertToPreviewTime(appState.currentTime)
+                            let previewTime = appState.convertToPreviewTime(appState.currentTime)
                             let playheadX = (previewTime / previewDuration) * contentWidth
 
                             Rectangle()
@@ -362,8 +356,8 @@ struct PreviewTimelineContent: View {
                     .gesture(
                         DragGesture(minimumDistance: 0)
                             .onChanged { value in
-                                let previewTime = previewTimeFromPosition(value.location.x, width: contentWidth)
-                                let sourceTime = convertFromPreviewTime(previewTime)
+                                let previewTime = previewTimeFromPosition(value.location.x, width: contentWidth, previewDuration: previewDuration)
+                                let sourceTime = appState.convertFromPreviewTime(previewTime)
                                 appState.seek(to: sourceTime)
                             }
                     )
@@ -371,8 +365,8 @@ struct PreviewTimelineContent: View {
                         guard appState.skimmingEnabled else { return }
                         switch phase {
                         case .active(let location):
-                            let previewTime = previewTimeFromPosition(location.x, width: contentWidth)
-                            let sourceTime = convertFromPreviewTime(previewTime)
+                            let previewTime = previewTimeFromPosition(location.x, width: contentWidth, previewDuration: previewDuration)
+                            let sourceTime = appState.convertFromPreviewTime(previewTime)
                             appState.skimTo(time: sourceTime)
                         case .ended:
                             appState.stopSkimming()
@@ -381,7 +375,7 @@ struct PreviewTimelineContent: View {
                 }
                 .onChange(of: appState.currentTime) { _, _ in
                     if appState.capturePlayheadEnabled && previewDuration > 0 {
-                        let previewTime = convertToPreviewTime(appState.currentTime)
+                        let previewTime = appState.convertToPreviewTime(appState.currentTime)
                         let position = previewTime / previewDuration
                         let segmentIndex = min(99, max(0, Int(position * 100)))
                         withAnimation(.linear(duration: 0.1)) {
@@ -391,7 +385,7 @@ struct PreviewTimelineContent: View {
                 }
                 .onChange(of: appState.capturePlayheadEnabled) { _, newValue in
                     if newValue && previewDuration > 0 {
-                        let previewTime = convertToPreviewTime(appState.currentTime)
+                        let previewTime = appState.convertToPreviewTime(appState.currentTime)
                         let position = previewTime / previewDuration
                         let segmentIndex = min(99, max(0, Int(position * 100)))
                         withAnimation(.easeInOut(duration: 0.3)) {
@@ -403,44 +397,9 @@ struct PreviewTimelineContent: View {
         }
     }
 
-    private func previewTimeFromPosition(_ x: CGFloat, width: CGFloat) -> Double {
+    private func previewTimeFromPosition(_ x: CGFloat, width: CGFloat, previewDuration: Double) -> Double {
         let proportion = x / width
         return max(0, min(proportion * previewDuration, previewDuration))
-    }
-
-    // Convert source time to preview time (collapsed timeline position)
-    private func convertToPreviewTime(_ sourceTime: Double) -> Double {
-        var previewTime: Double = 0
-
-        for region in keptRegions {
-            if sourceTime < region.startTime {
-                // Before this region
-                return previewTime
-            } else if sourceTime >= region.startTime && sourceTime <= region.endTime {
-                // Inside this region
-                return previewTime + (sourceTime - region.startTime)
-            } else {
-                // After this region, accumulate its duration
-                previewTime += region.duration
-            }
-        }
-
-        return previewTime
-    }
-
-    // Convert preview time back to source time
-    private func convertFromPreviewTime(_ previewTime: Double) -> Double {
-        var remainingTime = previewTime
-
-        for region in keptRegions {
-            if remainingTime <= region.duration {
-                return region.startTime + remainingTime
-            }
-            remainingTime -= region.duration
-        }
-
-        // If we're past all regions, return end of last region
-        return keptRegions.last?.endTime ?? 0
     }
 }
 
@@ -559,15 +518,10 @@ struct PreviewThumbnailTrackView: View {
 
     private let statusBarHeight: CGFloat = 4
 
-    private var keptRegions: [Region] {
-        appState.regions.filter { !$0.isBinned }
-    }
-
-    private var previewDuration: Double {
-        keptRegions.reduce(0) { $0 + $1.duration }
-    }
-
     var body: some View {
+        let keptRegions = appState.keptRegions
+        let previewDuration = appState.previewDuration
+
         ZStack(alignment: .leading) {
             // Thumbnails or Waveform for each kept region, positioned contiguously
             if appState.isAudioOnly {
@@ -655,6 +609,7 @@ struct ThumbnailStripView: View {
     @State private var lastGeneratedURL: URL?
     @State private var lastGeneratedWidth: CGFloat = 0
     @State private var lastGeneratedDuration: Double = 0
+    @State private var generationTask: Task<Void, Never>?
 
     let width: CGFloat
     let height: CGFloat
@@ -698,7 +653,7 @@ struct ThumbnailStripView: View {
             return
         }
 
-        let widthChanged = abs(width - lastGeneratedWidth) > 50
+        let widthChanged = abs(width - lastGeneratedWidth) > 20
         let urlChanged = url != lastGeneratedURL
         let durationChanged = lastGeneratedDuration == 0 && appState.duration > 0
 
@@ -712,6 +667,8 @@ struct ThumbnailStripView: View {
     }
 
     private func generateThumbnails(url: URL) {
+        generationTask?.cancel()
+
         let asset = AVAsset(url: url)
         let imageGenerator = AVAssetImageGenerator(asset: asset)
         imageGenerator.appliesPreferredTrackTransform = true
@@ -722,10 +679,12 @@ struct ThumbnailStripView: View {
 
         let interval = appState.duration / Double(numberOfThumbnails)
 
-        Task {
+        generationTask = Task {
             var newThumbnails: [(time: Double, image: NSImage)] = []
 
             for i in 0..<numberOfThumbnails {
+                if Task.isCancelled { return }
+
                 let time = Double(i) * interval + interval / 2
                 let cmTime = CMTime(seconds: time, preferredTimescale: 600)
 
@@ -739,8 +698,10 @@ struct ThumbnailStripView: View {
                 }
             }
 
-            await MainActor.run {
-                self.thumbnails = newThumbnails
+            if !Task.isCancelled {
+                await MainActor.run {
+                    self.thumbnails = newThumbnails
+                }
             }
         }
     }
@@ -753,6 +714,7 @@ struct PreviewThumbnailStripView: View {
     @State private var thumbnails: [(time: Double, image: NSImage)] = []
     @State private var lastKeptRegionIds: [UUID] = []
     @State private var lastGeneratedWidth: CGFloat = 0
+    @State private var generationTask: Task<Void, Never>?
 
     let keptRegions: [Region]
     let previewDuration: Double
@@ -790,7 +752,7 @@ struct PreviewThumbnailStripView: View {
 
         let currentIds = keptRegions.map { $0.id }
         let idsChanged = currentIds != lastKeptRegionIds
-        let widthChanged = abs(width - lastGeneratedWidth) > 50
+        let widthChanged = abs(width - lastGeneratedWidth) > 20
 
         guard idsChanged || widthChanged else { return }
 
@@ -801,6 +763,8 @@ struct PreviewThumbnailStripView: View {
     }
 
     private func generateThumbnails(url: URL) {
+        generationTask?.cancel()
+
         guard previewDuration > 0 else {
             thumbnails = []
             return
@@ -816,13 +780,15 @@ struct PreviewThumbnailStripView: View {
 
         let interval = previewDuration / Double(numberOfThumbnails)
 
-        Task {
+        generationTask = Task {
             var newThumbnails: [(time: Double, image: NSImage)] = []
 
             for i in 0..<numberOfThumbnails {
+                if Task.isCancelled { return }
+
                 // Calculate preview time, then convert to source time
                 let previewTime = Double(i) * interval + interval / 2
-                let sourceTime = convertFromPreviewTime(previewTime)
+                let sourceTime = appState.convertFromPreviewTime(previewTime)
                 let cmTime = CMTime(seconds: sourceTime, preferredTimescale: 600)
 
                 do {
@@ -835,23 +801,12 @@ struct PreviewThumbnailStripView: View {
                 }
             }
 
-            await MainActor.run {
-                self.thumbnails = newThumbnails
+            if !Task.isCancelled {
+                await MainActor.run {
+                    self.thumbnails = newThumbnails
+                }
             }
         }
-    }
-
-    private func convertFromPreviewTime(_ previewTime: Double) -> Double {
-        var remainingTime = previewTime
-
-        for region in keptRegions {
-            if remainingTime <= region.duration {
-                return region.startTime + remainingTime
-            }
-            remainingTime -= region.duration
-        }
-
-        return keptRegions.last?.endTime ?? 0
     }
 }
 
@@ -892,12 +847,8 @@ struct WaveformStripView: View {
             waveformData = nil
             loadWaveformIfNeeded()
         }
-        .onChange(of: width) { _, newWidth in
-            // Regenerate if width changed significantly (for zoom)
-            let widthRatio = lastGeneratedWidth > 0 ? newWidth / lastGeneratedWidth : 0
-            if widthRatio < 0.8 || widthRatio > 1.2 || lastGeneratedWidth == 0 {
-                loadWaveformIfNeeded()
-            }
+        .onChange(of: width) { _, _ in
+            loadWaveformIfNeeded()
         }
     }
 
@@ -905,10 +856,9 @@ struct WaveformStripView: View {
         guard let url = appState.videoURL, appState.duration > 0 else { return }
 
         let urlChanged = url != lastGeneratedURL
-        let widthRatio = lastGeneratedWidth > 0 ? width / lastGeneratedWidth : 0
-        let widthSignificantlyChanged = widthRatio < 0.8 || widthRatio > 1.2 || lastGeneratedWidth == 0
+        let widthChanged = abs(width - lastGeneratedWidth) > 20
 
-        guard urlChanged || widthSignificantlyChanged else { return }
+        guard urlChanged || widthChanged else { return }
 
         // Cancel any in-flight generation
         generationTask?.cancel()
@@ -984,6 +934,7 @@ struct PreviewWaveformStripView: View {
     @State private var waveformData: WaveformData?
     @State private var lastKeptRegionIds: [UUID] = []
     @State private var lastGeneratedWidth: CGFloat = 0
+    @State private var generationTask: Task<Void, Never>?
 
     let keptRegions: [Region]
     let previewDuration: Double
@@ -1025,14 +976,15 @@ struct PreviewWaveformStripView: View {
 
         let currentIds = keptRegions.map { $0.id }
         let idsChanged = currentIds != lastKeptRegionIds
-        let widthChanged = abs(width - lastGeneratedWidth) > 50
+        let widthChanged = abs(width - lastGeneratedWidth) > 20
 
         guard force || idsChanged || widthChanged else { return }
 
         lastKeptRegionIds = currentIds
         lastGeneratedWidth = width
 
-        Task {
+        generationTask?.cancel()
+        generationTask = Task {
             do {
                 // Use rough waveform for faster display
                 let samplesNeeded = max(200, Int(width / 2))
@@ -1040,6 +992,8 @@ struct PreviewWaveformStripView: View {
                     from: url,
                     totalSamples: samplesNeeded
                 )
+
+                if Task.isCancelled { return }
 
                 // Extract samples for kept regions only
                 var previewSamples: [Float] = []
@@ -1056,13 +1010,17 @@ struct PreviewWaveformStripView: View {
                     }
                 }
 
+                if Task.isCancelled { return }
+
                 let previewData = WaveformData(samples: previewSamples, duration: previewDuration)
 
                 await MainActor.run {
                     self.waveformData = previewData
                 }
             } catch {
-                print("Preview waveform generation failed: \(error)")
+                if !Task.isCancelled {
+                    print("Preview waveform generation failed: \(error)")
+                }
             }
         }
     }

@@ -162,22 +162,10 @@ struct QuickTrimApp: App {
     private func getFocusedAppState() -> AppState? {
         guard let window = NSApp.keyWindow,
               let contentView = window.contentView,
-              let hostingView = findHostingView(in: contentView) else {
+              let hostingView = DocumentHostingView.find(in: contentView) else {
             return nil
         }
         return hostingView.appState
-    }
-
-    private func findHostingView(in view: NSView) -> DocumentHostingView? {
-        if let hostingView = view as? DocumentHostingView {
-            return hostingView
-        }
-        for subview in view.subviews {
-            if let found = findHostingView(in: subview) {
-                return found
-            }
-        }
-        return nil
     }
 }
 
@@ -202,6 +190,19 @@ class WindowManager {
 // Custom hosting view to store AppState reference
 class DocumentHostingView: NSView {
     var appState: AppState?
+
+    /// Recursively search a view hierarchy for a DocumentHostingView
+    static func find(in view: NSView) -> DocumentHostingView? {
+        if let hostingView = view as? DocumentHostingView {
+            return hostingView
+        }
+        for subview in view.subviews {
+            if let found = find(in: subview) {
+                return found
+            }
+        }
+        return nil
+    }
 }
 
 // Wrapper view that creates a unique AppState per window
@@ -257,7 +258,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                 // Find an empty window or create one
                 if let window = NSApp.keyWindow,
                    let contentView = window.contentView,
-                   let hostingView = self.findHostingView(in: contentView),
+                   let hostingView = DocumentHostingView.find(in: contentView),
                    let appState = hostingView.appState,
                    appState.videoURL == nil {
                     appState.openVideo(url: url)
@@ -267,18 +268,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                 }
             }
         }
-    }
-
-    private func findHostingView(in view: NSView) -> DocumentHostingView? {
-        if let hostingView = view as? DocumentHostingView {
-            return hostingView
-        }
-        for subview in view.subviews {
-            if let found = findHostingView(in: subview) {
-                return found
-            }
-        }
-        return nil
     }
 
     private func openURLInNewWindow(_ url: URL) {
@@ -293,7 +282,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             if let url = self.pendingURL,
                let window = NSApp.keyWindow,
                let contentView = window.contentView,
-               let hostingView = self.findHostingView(in: contentView),
+               let hostingView = DocumentHostingView.find(in: contentView),
                let appState = hostingView.appState {
                 appState.openVideo(url: url)
                 self.pendingURL = nil
@@ -309,16 +298,32 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
-        // Check all windows for unsaved changes
-        for window in NSApp.windows {
-            if let contentView = window.contentView,
-               let hostingView = findHostingView(in: contentView),
-               let appState = hostingView.appState,
-               appState.hasUserCreatedRegions {
-                appState.showCloseConfirmation = true
-                return .terminateLater
+        // Check if any window has unsaved changes
+        let hasUnsavedChanges = NSApp.windows.contains { window in
+            guard let contentView = window.contentView,
+                  let hostingView = DocumentHostingView.find(in: contentView),
+                  let appState = hostingView.appState else {
+                return false
             }
+            return appState.hasUserCreatedRegions
         }
-        return .terminateNow
+
+        guard hasUnsavedChanges else {
+            return .terminateNow
+        }
+
+        // Show a single confirmation for all unsaved work
+        let alert = NSAlert()
+        alert.messageText = "Unsaved Changes"
+        alert.informativeText = "You have windows with unsaved trim regions. Are you sure you want to quit?"
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: "Quit Without Saving")
+        alert.addButton(withTitle: "Cancel")
+
+        if alert.runModal() == .alertFirstButtonReturn {
+            return .terminateNow
+        } else {
+            return .terminateCancel
+        }
     }
 }
