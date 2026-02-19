@@ -302,16 +302,19 @@ class AppState: ObservableObject {
             guard let player = player else { return }
 
             // If seekToStart set a pending target, always seek-then-play from there.
-            // This is the primary path after pressing Home — guarantees instant playback.
-            // Note: We call play() regardless of seek's `finished` flag because AVPlayer
-            // reports finished=false when seeking to the current position or when a
-            // prior seek is superseded, and we always want playback to start.
+            // In preview mode, nudge one frame forward from the region boundary to
+            // avoid AVPlayer edge cases where playback silently fails at exact
+            // region start positions.
             if let seekTarget = pendingSeekTime {
                 pendingSeekTime = nil
-                // Mark that we're starting from a known-good position so
-                // handlePreviewModePlayback won't interfere on the first tick.
-                safePlaybackStartTime = seekTarget
-                let cmTime = CMTime(seconds: seekTarget, preferredTimescale: 600)
+                let playFrom: Double
+                if previewModeEnabled {
+                    playFrom = seekTarget + (1.0 / frameRate)
+                } else {
+                    playFrom = seekTarget
+                }
+                safePlaybackStartTime = playFrom
+                let cmTime = CMTime(seconds: playFrom, preferredTimescale: 600)
                 player.seek(to: cmTime, toleranceBefore: .zero, toleranceAfter: .zero) { [weak self] _ in
                     self?.player?.play()
                 }

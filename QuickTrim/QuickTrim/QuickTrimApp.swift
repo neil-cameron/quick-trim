@@ -138,6 +138,13 @@ struct QuickTrimApp: App {
                 }
                 .keyboardShortcut("p", modifiers: [.command, .option])
 
+                Button("Toggle Capture Playhead") {
+                    if let appState = getFocusedAppState() {
+                        appState.capturePlayheadEnabled.toggle()
+                    }
+                }
+                .keyboardShortcut("s", modifiers: [.control, .option, .command])
+
                 Divider()
 
                 Button("Zoom In") {
