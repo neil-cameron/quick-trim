@@ -883,6 +883,10 @@ struct WaveformStripView: View {
             } catch {
                 if !Task.isCancelled {
                     print("Waveform generation failed: \(error)")
+                    // Set empty waveform to clear spinner
+                    await MainActor.run {
+                        self.waveformData = WaveformData(samples: [0], duration: appState.duration)
+                    }
                 }
             }
         }
@@ -1012,7 +1016,8 @@ struct PreviewWaveformStripView: View {
 
                 if Task.isCancelled { return }
 
-                let previewData = WaveformData(samples: previewSamples, duration: previewDuration)
+                // Always set waveform data even if samples are empty (prevents infinite spinner)
+                let previewData = WaveformData(samples: previewSamples.isEmpty ? [0] : previewSamples, duration: previewDuration)
 
                 await MainActor.run {
                     self.waveformData = previewData
@@ -1020,6 +1025,9 @@ struct PreviewWaveformStripView: View {
             } catch {
                 if !Task.isCancelled {
                     print("Preview waveform generation failed: \(error)")
+                    await MainActor.run {
+                        self.waveformData = WaveformData(samples: [0], duration: previewDuration)
+                    }
                 }
             }
         }

@@ -110,6 +110,10 @@ class AppState: ObservableObject {
     private var skimStopTask: Task<Void, Never>?
     @Published var isSkimming: Bool = false
 
+    // Pending seek target — set by seekToStart so togglePlayPause can use
+    // the intended position even if AVPlayer hasn't finished seeking yet
+    private var pendingSeekTime: Double?
+
     init() {}
 
     deinit {
@@ -279,11 +283,18 @@ class AppState: ObservableObject {
     // MARK: - Playback
 
     func togglePlayPause() {
+        // Always cancel any pending skim stop so it doesn't interfere with playback
+        skimStopTask?.cancel()
+        if isSkimming {
+            isSkimming = false
+        }
+
         if isPlaying {
             player?.pause()
         } else {
             guard let player = player else { return }
-            let actualTime = CMTimeGetSeconds(player.currentTime())
+            // Use pending seek target if available (seek may not have completed yet)
+            let actualTime = pendingSeekTime ?? CMTimeGetSeconds(player.currentTime())
 
             // Determine the valid playback end point
             let endTime: Double
@@ -331,7 +342,17 @@ class AppState: ObservableObject {
                     }
                 }
             }
-            player.play()
+
+            // If there's a pending seek, ensure we seek-then-play to avoid race
+            if let seekTarget = pendingSeekTime {
+                pendingSeekTime = nil
+                let cmTime = CMTime(seconds: seekTarget, preferredTimescale: 600)
+                player.seek(to: cmTime, toleranceBefore: .zero, toleranceAfter: .zero) { [weak self] _ in
+                    self?.player?.play()
+                }
+            } else {
+                player.play()
+            }
         }
     }
 
@@ -399,7 +420,6 @@ class AppState: ObservableObject {
     }
 
     func seekToStart() {
-        // Pause first so togglePlayPause sees correct state
         player?.pause()
 
         let targetTime: Double
@@ -409,7 +429,13 @@ class AppState: ObservableObject {
             targetTime = 0
         }
 
-        seek(to: targetTime)
+        // Store pending target so togglePlayPause knows where we're headed
+        pendingSeekTime = targetTime
+        currentTime = targetTime  // Update UI immediately
+
+        seek(to: targetTime) { [weak self] _ in
+            self?.pendingSeekTime = nil
+        }
     }
 
     // Handle preview mode playback - skip binned regions
