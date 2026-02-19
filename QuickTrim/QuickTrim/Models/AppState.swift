@@ -115,6 +115,11 @@ class AppState: ObservableObject {
     // Cleared only by togglePlayPause after it has used the value.
     private var pendingSeekTime: Double?
 
+    // Set when play starts from a known-good position (e.g. after Home+Space).
+    // Prevents handlePreviewModePlayback from interfering before the time
+    // observer has caught up to the actual seek position.
+    private var safePlaybackStartTime: Double?
+
     init() {}
 
     deinit {
@@ -292,6 +297,7 @@ class AppState: ObservableObject {
 
         if isPlaying {
             player?.pause()
+            safePlaybackStartTime = nil
         } else {
             guard let player = player else { return }
 
@@ -302,6 +308,9 @@ class AppState: ObservableObject {
             // prior seek is superseded, and we always want playback to start.
             if let seekTarget = pendingSeekTime {
                 pendingSeekTime = nil
+                // Mark that we're starting from a known-good position so
+                // handlePreviewModePlayback won't interfere on the first tick.
+                safePlaybackStartTime = seekTarget
                 let cmTime = CMTime(seconds: seekTarget, preferredTimescale: 600)
                 player.seek(to: cmTime, toleranceBefore: .zero, toleranceAfter: .zero) { [weak self] _ in
                     self?.player?.play()
@@ -449,6 +458,18 @@ class AppState: ObservableObject {
     private func handlePreviewModePlayback(currentTime: Double) {
         // Only handle during actual playback (not when paused)
         guard isPlaying else { return }
+
+        // If we just started playback from a known-good position (e.g. Home+Space),
+        // the time observer may report a stale position for a few ticks. Wait until
+        // the reported time is near our target before applying binned-region logic.
+        if let safeTime = safePlaybackStartTime {
+            if abs(currentTime - safeTime) > 0.5 {
+                // Time observer hasn't caught up yet — skip this tick
+                return
+            }
+            // We've arrived at (or past) the safe position — resume normal logic
+            safePlaybackStartTime = nil
+        }
 
         // Check if we're in a binned region
         let inBinnedRegion = regions.contains { region in
