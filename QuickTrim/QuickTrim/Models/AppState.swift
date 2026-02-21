@@ -387,8 +387,8 @@ class AppState: ObservableObject {
     func skimTo(time: Double) {
         seek(to: time)
 
-        // Only do audio playback for audio-only files during skimming
-        guard isAudioOnly && skimmingEnabled else { return }
+        // Play audio briefly during skimming for all media types
+        guard skimmingEnabled else { return }
 
         // Cancel any pending stop task
         skimStopTask?.cancel()
