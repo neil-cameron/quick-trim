@@ -101,6 +101,10 @@ struct RegionRowView: View {
 
     @State private var thumbnail: NSImage?
 
+    private var isCurrentRegion: Bool {
+        appState.currentRegionID == region.id
+    }
+
     var body: some View {
         HStack(spacing: 10) {
             // Thumbnail or waveform preview
@@ -178,17 +182,33 @@ struct RegionRowView: View {
         .padding(8)
         .background(
             RoundedRectangle(cornerRadius: 8)
-                .fill(region.isBinned ? Color.red.opacity(0.1) : Color(nsColor: .controlBackgroundColor))
+                .fill(rowBackgroundColor)
         )
         .overlay(
             RoundedRectangle(cornerRadius: 8)
-                .stroke(region.isBinned ? Color.red.opacity(0.3) : Color.clear, lineWidth: 1)
+                .stroke(rowBorderColor, lineWidth: 2)
         )
         .contentShape(Rectangle())
         .onTapGesture {
             // Seek to start of region when clicked
             appState.seek(to: region.startTime)
         }
+    }
+
+    private var rowBackgroundColor: Color {
+        if isCurrentRegion {
+            return Color.accentColor.opacity(region.isBinned ? 0.18 : 0.14)
+        }
+
+        return region.isBinned ? Color.red.opacity(0.1) : Color(nsColor: .controlBackgroundColor)
+    }
+
+    private var rowBorderColor: Color {
+        if isCurrentRegion {
+            return Color.accentColor
+        }
+
+        return region.isBinned ? Color.red.opacity(0.3) : Color.clear
     }
 
     private func formatTimeRange() -> String {

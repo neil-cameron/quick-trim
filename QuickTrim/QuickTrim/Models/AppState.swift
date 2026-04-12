@@ -102,6 +102,10 @@ class AppState: ObservableObject {
         return regions.contains { !$0.isBinned }
     }
 
+    var currentRegionID: Region.ID? {
+        region(containing: currentTime)?.id
+    }
+
     private var timeObserver: Any?
     private var cancellables = Set<AnyCancellable>()
     private var isAccessingSecurityScopedResource = false
@@ -258,6 +262,17 @@ class AppState: ObservableObject {
         regions[index].isBinned.toggle()
     }
 
+    func region(containing time: Double) -> Region? {
+        guard !regions.isEmpty else { return nil }
+
+        let clampedTime = max(0, min(time, duration))
+        if clampedTime >= duration - Self.timeTolerance {
+            return regions.max { $0.endTime < $1.endTime }
+        }
+
+        return regions.first { $0.contains(time: clampedTime) }
+    }
+
     func binRegionLeftOfPlayhead() {
         guard let index = regions.lastIndex(where: { $0.endTime <= currentTime + Self.timeTolerance }) else { return }
 
@@ -375,7 +390,10 @@ class AppState: ObservableObject {
     }
 
     func seek(to time: Double, completion: ((Bool) -> Void)? = nil) {
-        let cmTime = CMTime(seconds: max(0, min(time, duration)), preferredTimescale: 600)
+        let targetTime = max(0, min(time, duration))
+        currentTime = targetTime
+
+        let cmTime = CMTime(seconds: targetTime, preferredTimescale: 600)
         if let completion = completion {
             player?.seek(to: cmTime, toleranceBefore: .zero, toleranceAfter: .zero, completionHandler: completion)
         } else {

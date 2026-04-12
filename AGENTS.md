@@ -9,6 +9,8 @@
   - `Assets.xcassets/`: App icons and asset catalogs.
   - `Info.plist`, `QuickTrim.entitlements`, `QuickTrimApp.swift`: app configuration and entry point.
 - `QuickTrim/generate_icons.sh`: Helper script for regenerating AppIcon PNGs from SVG.
+- `Icon/`: Source artwork and exported icon assets. Do not edit generated app icon PNGs directly unless regenerating the catalog.
+- `README.md`: User-facing app overview, shortcuts, and supported formats.
 
 ## Build, Test, and Development Commands
 - Open in Xcode: `open QuickTrim/QuickTrim.xcodeproj` and press Run for local builds.
@@ -20,6 +22,7 @@
 - Types and files use UpperCamelCase (e.g., `TimelineView.swift`).
 - Views are colocated in `Views/`, services in `Services/`, and models in `Models/`.
 - Keep UI strings short and user-facing; prefer `AppState` for shared state.
+- Keep README shortcuts and supported formats in sync with `AppState` and the SwiftUI command/menu handlers.
 
 ## Testing Guidelines
 - No automated test targets are present currently.
