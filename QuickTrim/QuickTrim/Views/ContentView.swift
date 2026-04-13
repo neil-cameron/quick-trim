@@ -219,6 +219,14 @@ class KeyEventView: NSView {
             } else {
                 super.keyDown(with: event)
             }
+        case 11: // B key
+            if modifiers.isEmpty {
+                appState.toggleBinForCurrentRegion()
+            } else if modifiers == .option {
+                appState.removeStartMarkerForCurrentRegion()
+            } else {
+                super.keyDown(with: event)
+            }
         case 115: // Home key
             if modifiers.isEmpty {
                 appState.seekToStart()

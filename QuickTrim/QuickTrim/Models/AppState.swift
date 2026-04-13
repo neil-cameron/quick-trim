@@ -262,6 +262,37 @@ class AppState: ObservableObject {
         regions[index].isBinned.toggle()
     }
 
+    func toggleBinForCurrentRegion() {
+        guard let region = region(containing: currentTime) else { return }
+        toggleBin(for: region)
+    }
+
+    func canRemoveStartMarker(for region: Region) -> Bool {
+        guard let index = regions.firstIndex(where: { $0.id == region.id }) else { return false }
+        return index > 0
+    }
+
+    func removeStartMarker(for region: Region) {
+        guard let index = regions.firstIndex(where: { $0.id == region.id }), index > 0 else { return }
+
+        saveStateForUndo()
+
+        let previousRegion = regions[index - 1]
+        let mergedRegion = Region(
+            startTime: previousRegion.startTime,
+            endTime: region.endTime,
+            isBinned: region.isBinned
+        )
+
+        regions.removeSubrange((index - 1)...index)
+        regions.insert(mergedRegion, at: index - 1)
+    }
+
+    func removeStartMarkerForCurrentRegion() {
+        guard let region = region(containing: currentTime) else { return }
+        removeStartMarker(for: region)
+    }
+
     func region(containing time: Double) -> Region? {
         guard !regions.isEmpty else { return nil }
 

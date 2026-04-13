@@ -5,9 +5,11 @@
 
 import SwiftUI
 import AVFoundation
+import AppKit
 
 struct RegionsPaneView: View {
     @EnvironmentObject var appState: AppState
+    @State private var isOptionPressed = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -48,7 +50,11 @@ struct RegionsPaneView: View {
                 ScrollView {
                     LazyVStack(spacing: 8) {
                         ForEach(Array(appState.regions.enumerated()), id: \.element.id) { index, region in
-                            RegionRowView(region: region, index: index)
+                            RegionRowView(
+                                region: region,
+                                index: index,
+                                isRemoveModeEnabled: isOptionPressed
+                            )
                         }
                     }
                     .padding(8)
@@ -91,6 +97,7 @@ struct RegionsPaneView: View {
             .padding(12)
             .background(Color(nsColor: .controlBackgroundColor))
         }
+        .background(ModifierKeyMonitor(isOptionPressed: $isOptionPressed))
     }
 }
 
@@ -98,6 +105,7 @@ struct RegionRowView: View {
     @EnvironmentObject var appState: AppState
     let region: Region
     let index: Int
+    let isRemoveModeEnabled: Bool
 
     @State private var thumbnail: NSImage?
 
@@ -168,16 +176,21 @@ struct RegionRowView: View {
 
             Spacer()
 
-            // Bin toggle button
+            // Bin toggle button, or start-marker removal while Option is held.
             Button(action: {
-                appState.toggleBin(for: region)
+                if isRemoveModeEnabled || NSEvent.modifierFlags.contains(.option) {
+                    appState.removeStartMarker(for: region)
+                } else {
+                    appState.toggleBin(for: region)
+                }
             }) {
-                Image(systemName: region.isBinned ? "trash.fill" : "trash")
-                    .foregroundColor(region.isBinned ? .red : .secondary)
+                Image(systemName: actionIconName)
+                    .foregroundColor(actionIconColor)
                     .font(.title3)
             }
             .buttonStyle(.plain)
-            .help(region.isBinned ? "Restore region" : "Bin region")
+            .disabled(isRemoveModeEnabled && !canRemoveStartMarker)
+            .help(actionHelpText)
         }
         .padding(8)
         .background(
@@ -193,6 +206,36 @@ struct RegionRowView: View {
             // Seek to start of region when clicked
             appState.seek(to: region.startTime)
         }
+    }
+
+    private var canRemoveStartMarker: Bool {
+        appState.canRemoveStartMarker(for: region)
+    }
+
+    private var actionIconName: String {
+        if isRemoveModeEnabled {
+            return canRemoveStartMarker ? "minus.circle.fill" : "minus.circle"
+        }
+
+        return region.isBinned ? "trash.fill" : "trash"
+    }
+
+    private var actionIconColor: Color {
+        if isRemoveModeEnabled {
+            return canRemoveStartMarker ? .orange : .secondary.opacity(0.45)
+        }
+
+        return region.isBinned ? .red : .secondary
+    }
+
+    private var actionHelpText: String {
+        if isRemoveModeEnabled {
+            return canRemoveStartMarker
+                ? "Remove start marker and merge with previous region"
+                : "First region has no start marker to remove"
+        }
+
+        return region.isBinned ? "Restore region" : "Bin region"
     }
 
     private var rowBackgroundColor: Color {
@@ -254,6 +297,95 @@ struct RegionRowView: View {
             } catch {
                 print("Failed to generate thumbnail: \(error)")
             }
+        }
+    }
+}
+
+struct ModifierKeyMonitor: NSViewRepresentable {
+    @Binding var isOptionPressed: Bool
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(isOptionPressed: $isOptionPressed)
+    }
+
+    func makeNSView(context: Context) -> ModifierKeyMonitorView {
+        let view = ModifierKeyMonitorView()
+        view.onOptionChanged = context.coordinator.setOptionPressed
+        return view
+    }
+
+    func updateNSView(_ nsView: ModifierKeyMonitorView, context: Context) {
+        context.coordinator.isOptionPressed = $isOptionPressed
+        nsView.onOptionChanged = context.coordinator.setOptionPressed
+        nsView.updateFromCurrentModifiers()
+    }
+
+    static func dismantleNSView(_ nsView: ModifierKeyMonitorView, coordinator: Coordinator) {
+        nsView.stopMonitoring()
+    }
+
+    final class Coordinator {
+        var isOptionPressed: Binding<Bool>
+
+        init(isOptionPressed: Binding<Bool>) {
+            self.isOptionPressed = isOptionPressed
+        }
+
+        func setOptionPressed(_ pressed: Bool) {
+            guard isOptionPressed.wrappedValue != pressed else { return }
+            isOptionPressed.wrappedValue = pressed
+        }
+    }
+}
+
+final class ModifierKeyMonitorView: NSView {
+    var onOptionChanged: ((Bool) -> Void)?
+
+    private var monitor: Any?
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+
+        if window == nil {
+            stopMonitoring()
+            onOptionChanged?(false)
+        } else {
+            startMonitoring()
+            updateFromCurrentModifiers()
+        }
+    }
+
+    deinit {
+        stopMonitoring()
+    }
+
+    func updateFromCurrentModifiers() {
+        publishOptionState(from: NSEvent.modifierFlags)
+    }
+
+    func stopMonitoring() {
+        if let monitor {
+            NSEvent.removeMonitor(monitor)
+            self.monitor = nil
+        }
+    }
+
+    private func startMonitoring() {
+        guard monitor == nil else { return }
+
+        monitor = NSEvent.addLocalMonitorForEvents(matching: [.flagsChanged, .leftMouseDown, .leftMouseUp]) { [weak self] event in
+            self?.publishOptionState(from: event.modifierFlags)
+            return event
+        }
+    }
+
+    private func publishOptionState(from modifierFlags: NSEvent.ModifierFlags) {
+        let pressed = modifierFlags
+            .intersection(.deviceIndependentFlagsMask)
+            .contains(.option)
+
+        DispatchQueue.main.async { [weak self] in
+            self?.onOptionChanged?(pressed)
         }
     }
 }

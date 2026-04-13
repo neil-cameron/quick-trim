@@ -112,6 +112,18 @@ struct QuickTrimApp: App {
 
                 Divider()
 
+                Button("Toggle Bin for Current Region") {
+                    getFocusedAppState()?.toggleBinForCurrentRegion()
+                }
+                .keyboardShortcut("b", modifiers: [])
+
+                Button("Remove Current Region Start Marker") {
+                    getFocusedAppState()?.removeStartMarkerForCurrentRegion()
+                }
+                .keyboardShortcut("b", modifiers: .option)
+
+                Divider()
+
                 Button("Bin Region Left of Playhead") {
                     getFocusedAppState()?.binRegionLeftOfPlayhead()
                 }

@@ -12,9 +12,10 @@ QuickTrim is a lightweight macOS app for fast, region-based trimming of video an
 ## How to use
 1. Launch the app and drop a video/audio file.
 2. Scrub to a point and press `M` to split (create regions).
-3. Bin regions via the trash icon in the Regions list.
-4. Toggle Preview mode to hear/see only kept regions.
-5. Click Export and choose a destination.
+3. Bin the current region with `B`, or use the trash icon in the Regions list.
+4. Hold `Option` in the Regions list to turn trash icons into remove-marker icons. Click one to remove that region's start marker and merge it into the previous region.
+5. Toggle Preview mode to hear/see only kept regions.
+6. Click Export and choose a destination.
 
 ## Useful shortcuts
 - Play/Pause: `Space`
@@ -23,6 +24,9 @@ QuickTrim is a lightweight macOS app for fast, region-based trimming of video an
 - Step 10 frames: `Shift` + `←` / `→`
 - Step 1 second: `⌘` + `Shift` + `←` / `→`
 - Go to start: `Home`
+- Toggle bin on current region: `B`
+- Remove current region start marker: `⌥B`
+- Remove region start marker from list: hold `Option` and click the remove-marker icon
 - Bin left/right of playhead: `⌘[` / `⌘]`
 - Toggle Preview: `⌘⌥P`
 - Toggle Skimming: `⌘⌥S`
