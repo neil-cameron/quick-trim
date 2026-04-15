@@ -83,6 +83,35 @@ class AppState: ObservableObject {
     @Published var isExporting: Bool = false
     @Published var exportProgress: Double = 0
 
+    // Export options
+    @Published var exportRemoveAudio: Bool = false
+    @Published var exportTranscode: Bool = false
+
+    // Crop
+    @Published var cropLeft: Int = 0
+    @Published var cropTop: Int = 0
+    @Published var cropRight: Int = 0
+    @Published var cropBottom: Int = 0
+    @Published var isCropModeActive: Bool = false
+    @Published var videoNativeSize: CGSize = .zero
+
+    var hasCrop: Bool {
+        cropLeft > 0 || cropTop > 0 || cropRight > 0 || cropBottom > 0
+    }
+
+    var croppedSize: CGSize {
+        let w = max(1, Int(videoNativeSize.width) - cropLeft - cropRight)
+        let h = max(1, Int(videoNativeSize.height) - cropTop - cropBottom)
+        return CGSize(width: w, height: h)
+    }
+
+    func resetCrop() {
+        cropLeft = 0
+        cropTop = 0
+        cropRight = 0
+        cropBottom = 0
+    }
+
     // Undo/Redo
     private var undoStack: [RegionState] = []
     private var redoStack: [RegionState] = []
@@ -158,6 +187,12 @@ class AppState: ObservableObject {
                     self.isAudioOnly = false
                     let nominalFrameRate = try await videoTrack.load(.nominalFrameRate)
                     self.frameRate = Double(nominalFrameRate)
+
+                    // Load native video size (accounting for rotation)
+                    let naturalSize = try await videoTrack.load(.naturalSize)
+                    let preferredTransform = try await videoTrack.load(.preferredTransform)
+                    let transformedSize = naturalSize.applying(preferredTransform)
+                    self.videoNativeSize = CGSize(width: abs(transformedSize.width), height: abs(transformedSize.height))
                 } else if audioTracks.first != nil {
                     // No video track but has audio - audio-only file
                     self.isAudioOnly = true
@@ -218,6 +253,12 @@ class AppState: ObservableObject {
         duration = 0
         currentTime = 0
         isAudioOnly = false
+        videoNativeSize = .zero
+        cropLeft = 0
+        cropTop = 0
+        cropRight = 0
+        cropBottom = 0
+        isCropModeActive = false
         regions = []
         undoStack = []
         redoStack = []
@@ -624,6 +665,16 @@ class AppState: ObservableObject {
         isExporting = true
         exportProgress = 0
 
+        let options = ExportOptions(
+            removeAudio: exportRemoveAudio,
+            transcodeOutput: exportTranscode,
+            cropLeft: cropLeft,
+            cropTop: cropTop,
+            cropRight: cropRight,
+            cropBottom: cropBottom,
+            videoSize: videoNativeSize
+        )
+
         Task.detached { [weak self] in
             guard let self = self else { return }
             do {
@@ -631,6 +682,7 @@ class AppState: ObservableObject {
                     sourceURL: sourceURL,
                     regions: keptRegions,
                     outputURL: outputURL,
+                    options: options,
                     progressHandler: { progress in
                         DispatchQueue.main.async {
                             self.exportProgress = progress

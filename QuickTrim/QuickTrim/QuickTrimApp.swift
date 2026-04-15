@@ -124,15 +124,12 @@ struct QuickTrimApp: App {
 
                 Divider()
 
-                Button("Bin Region Left of Playhead") {
-                    getFocusedAppState()?.binRegionLeftOfPlayhead()
+                Button("Crop") {
+                    if let appState = getFocusedAppState() {
+                        appState.isCropModeActive.toggle()
+                    }
                 }
-                .keyboardShortcut("[", modifiers: .command)
-
-                Button("Bin Region Right of Playhead") {
-                    getFocusedAppState()?.binRegionRightOfPlayhead()
-                }
-                .keyboardShortcut("]", modifiers: .command)
+                .keyboardShortcut("c", modifiers: [.command, .option])
 
                 Divider()
 

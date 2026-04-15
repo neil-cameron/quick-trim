@@ -15,6 +15,15 @@ struct VideoPlayerView: View {
                 if appState.isAudioOnly {
                     // Show waveform visualization for audio files
                     AudioVisualizationView()
+                } else if appState.isCropModeActive {
+                    // Full video with crop overlay
+                    ZStack {
+                        AVPlayerContainerView(player: player)
+                        CropOverlayView()
+                    }
+                } else if appState.hasCrop {
+                    // Cropped video display
+                    CroppedVideoView(player: player)
                 } else {
                     AVPlayerContainerView(player: player)
                 }
@@ -25,6 +34,12 @@ struct VideoPlayerView: View {
                         Text("No media loaded")
                             .foregroundColor(.gray)
                     )
+            }
+
+            // Crop controls panel (shown in crop mode)
+            if appState.isCropModeActive && !appState.isAudioOnly {
+                Divider()
+                CropControlsPanel()
             }
 
             // Custom controls bar
@@ -69,6 +84,18 @@ struct VideoPlayerView: View {
                     .help("Next frame (→)")
                 }
                 .disabled(appState.player == nil)
+
+                // Crop toggle (video only)
+                if !appState.isAudioOnly && appState.player != nil {
+                    Divider()
+                        .frame(height: 20)
+
+                    Toggle(isOn: $appState.isCropModeActive) {
+                        Image(systemName: "crop")
+                    }
+                    .toggleStyle(.button)
+                    .help("Crop video")
+                }
 
                 Divider()
                     .frame(height: 20)

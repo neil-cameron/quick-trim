@@ -31,12 +31,27 @@ enum ExportError: LocalizedError {
     }
 }
 
+struct ExportOptions {
+    var removeAudio: Bool = false
+    var transcodeOutput: Bool = false
+    var cropLeft: Int = 0
+    var cropTop: Int = 0
+    var cropRight: Int = 0
+    var cropBottom: Int = 0
+    var videoSize: CGSize = .zero
+
+    var hasCrop: Bool {
+        cropLeft > 0 || cropTop > 0 || cropRight > 0 || cropBottom > 0
+    }
+}
+
 class VideoExporter {
 
     static func export(
         sourceURL: URL,
         regions: [Region],
         outputURL: URL,
+        options: ExportOptions = ExportOptions(),
         progressHandler: @escaping @Sendable (Double) -> Void
     ) async throws -> URL {
         guard !regions.isEmpty else {
@@ -57,6 +72,7 @@ class VideoExporter {
             sourceAsset: sourceAsset,
             regions: sortedRegions,
             outputURL: outputURL,
+            options: options,
             progressHandler: progressHandler
         )
 
@@ -71,6 +87,7 @@ class VideoExporter {
         sourceAsset: AVURLAsset,
         regions: [Region],
         outputURL: URL,
+        options: ExportOptions,
         progressHandler: @escaping @Sendable (Double) -> Void
     ) async throws -> Bool {
 
@@ -92,14 +109,14 @@ class VideoExporter {
         var compositionVideoTrack: AVMutableCompositionTrack?
         var compositionAudioTrack: AVMutableCompositionTrack?
 
-        if let sourceVideoTrack = videoTracks.first {
+        if videoTracks.first != nil {
             compositionVideoTrack = composition.addMutableTrack(
                 withMediaType: .video,
                 preferredTrackID: kCMPersistentTrackID_Invalid
             )
         }
 
-        if audioTracks.first != nil {
+        if !options.removeAudio, audioTracks.first != nil {
             compositionAudioTrack = composition.addMutableTrack(
                 withMediaType: .audio,
                 preferredTrackID: kCMPersistentTrackID_Invalid
@@ -125,8 +142,9 @@ class VideoExporter {
                     )
                 }
 
-                // Insert audio if available
-                if let sourceAudioTrack = audioTracks.first,
+                // Insert audio if available and not removing audio
+                if !options.removeAudio,
+                   let sourceAudioTrack = audioTracks.first,
                    let audioTrack = compositionAudioTrack {
                     try audioTrack.insertTimeRange(
                         timeRange,
@@ -143,10 +161,47 @@ class VideoExporter {
         }
 
         // Preserve video orientation if video exists
+        var preferredTransform: CGAffineTransform = .identity
         if let sourceVideoTrack = videoTracks.first,
            let videoTrack = compositionVideoTrack {
-            let preferredTransform = try await sourceVideoTrack.load(.preferredTransform)
+            preferredTransform = try await sourceVideoTrack.load(.preferredTransform)
             videoTrack.preferredTransform = preferredTransform
+        }
+
+        // Build video composition for crop if needed
+        var videoComposition: AVVideoComposition? = nil
+        if options.hasCrop, let videoTrack = compositionVideoTrack {
+            let croppedWidth = max(2, Int(options.videoSize.width) - options.cropLeft - options.cropRight)
+            let croppedHeight = max(2, Int(options.videoSize.height) - options.cropTop - options.cropBottom)
+
+            let cropTranslation = CGAffineTransform(
+                translationX: -CGFloat(options.cropLeft),
+                y: -CGFloat(options.cropTop)
+            )
+
+            let mutableVC = AVMutableVideoComposition()
+            mutableVC.renderSize = CGSize(width: croppedWidth, height: croppedHeight)
+
+            let nominalFrameRate: Float
+            if let sourceVideoTrack = videoTracks.first {
+                nominalFrameRate = try await sourceVideoTrack.load(.nominalFrameRate)
+            } else {
+                nominalFrameRate = 30
+            }
+            mutableVC.frameDuration = CMTime(value: 1, timescale: CMTimeScale(nominalFrameRate > 0 ? nominalFrameRate : 30))
+
+            let instruction = AVMutableVideoCompositionInstruction()
+            instruction.timeRange = CMTimeRange(start: .zero, end: composition.duration)
+
+            let layerInstruction = AVMutableVideoCompositionLayerInstruction(assetTrack: videoTrack)
+            layerInstruction.setTransform(
+                preferredTransform.concatenating(cropTranslation),
+                at: .zero
+            )
+
+            instruction.layerInstructions = [layerInstruction]
+            mutableVC.instructions = [instruction]
+            videoComposition = mutableVC
         }
 
         // Determine output file type based on source and media type
@@ -178,6 +233,17 @@ class VideoExporter {
             default:
                 outputFileType = .mp4
             }
+        }
+
+        // If transcoding or crop requested, skip passthrough and re-encode directly
+        if options.transcodeOutput || options.hasCrop {
+            return try await exportWithHighQuality(
+                composition: composition,
+                outputURL: outputURL,
+                outputFileType: outputFileType,
+                videoComposition: videoComposition,
+                progressHandler: progressHandler
+            )
         }
 
         // Create export session - try passthrough first
@@ -239,6 +305,7 @@ class VideoExporter {
         composition: AVComposition,
         outputURL: URL,
         outputFileType: AVFileType,
+        videoComposition: AVVideoComposition? = nil,
         progressHandler: @escaping @Sendable (Double) -> Void
     ) async throws -> Bool {
 
@@ -259,6 +326,7 @@ class VideoExporter {
         exportSession.outputURL = outputURL
         exportSession.outputFileType = outputFileType
         exportSession.shouldOptimizeForNetworkUse = false
+        exportSession.videoComposition = videoComposition
 
         // Monitor progress in background
         let progressTask = Task.detached {

@@ -10,6 +10,7 @@ import AppKit
 struct RegionsPaneView: View {
     @EnvironmentObject var appState: AppState
     @State private var isOptionPressed = false
+    @State private var showExportSettings = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -83,16 +84,37 @@ struct RegionsPaneView: View {
                 }
                 .font(.caption)
 
-                Button(action: { appState.exportVideo() }) {
-                    HStack {
-                        Image(systemName: "square.and.arrow.up")
-                        Text("Export")
+                HStack(spacing: 8) {
+                    Button(action: { appState.exportVideo() }) {
+                        HStack {
+                            Image(systemName: "square.and.arrow.up")
+                            Text("Export")
+                        }
+                        .frame(maxWidth: .infinity)
                     }
-                    .frame(maxWidth: .infinity)
+                    .buttonStyle(.borderedProminent)
+                    .controlSize(.large)
+                    .disabled(!appState.canExport)
+
+                    Button(action: { showExportSettings.toggle() }) {
+                        Image(systemName: "gearshape")
+                    }
+                    .controlSize(.large)
+                    .popover(isPresented: $showExportSettings) {
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text("Export Options")
+                                .font(.headline)
+
+                            Toggle("No sound", isOn: $appState.exportRemoveAudio)
+                                .disabled(appState.isAudioOnly)
+
+                            Toggle("Transcode output", isOn: $appState.exportTranscode)
+                                .disabled(appState.isAudioOnly)
+                        }
+                        .padding()
+                        .frame(width: 200)
+                    }
                 }
-                .buttonStyle(.borderedProminent)
-                .controlSize(.large)
-                .disabled(!appState.canExport)
             }
             .padding(12)
             .background(Color(nsColor: .controlBackgroundColor))

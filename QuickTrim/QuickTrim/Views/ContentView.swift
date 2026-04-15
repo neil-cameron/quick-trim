@@ -148,8 +148,11 @@ struct KeyEventHandler: NSViewRepresentable {
 
     func updateNSView(_ nsView: KeyEventView, context: Context) {
         nsView.appState = appState
-        // Re-establish first responder if we lost it
+        // Re-establish first responder if we lost it, but not when a text field is being edited
         if nsView.window?.firstResponder !== nsView {
+            if nsView.window?.firstResponder is NSTextView {
+                return
+            }
             DispatchQueue.main.async {
                 nsView.window?.makeFirstResponder(nsView)
             }
