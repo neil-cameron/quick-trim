@@ -281,15 +281,24 @@ struct RegionRowView: View {
     }
 
     private func formatTime(_ time: Double) -> String {
-        let minutes = Int(time) / 60
+        let hours = Int(time) / 3600
+        let minutes = (Int(time) % 3600) / 60
         let seconds = Int(time) % 60
         let frames = Int((time - floor(time)) * appState.frameRate)
+
+        if hours > 0 {
+            return String(format: "%d:%02d:%02d:%02d", hours, minutes, seconds, frames)
+        }
         return String(format: "%02d:%02d:%02d", minutes, seconds, frames)
     }
 
     private func formatDuration() -> String {
         let duration = region.duration
-        if duration >= 60 {
+        if duration >= 3600 {
+            let hours = Int(duration) / 3600
+            let minutes = (Int(duration) % 3600) / 60
+            return "\(hours)h \(minutes)m"
+        } else if duration >= 60 {
             let minutes = Int(duration) / 60
             let seconds = Int(duration) % 60
             return "\(minutes)m \(seconds)s"
@@ -298,8 +307,19 @@ struct RegionRowView: View {
         }
     }
 
+    /// LazyVStack recycles rows on scroll, so cache generated thumbnails —
+    /// keyed by file + snapshot time — instead of re-running the image
+    /// generator on every reappearance.
+    private static let thumbnailCache = NSCache<NSString, NSImage>()
+
     private func loadThumbnail() {
         guard let url = appState.videoURL else { return }
+
+        let cacheKey = "\(url.path)#\(Int(region.middleTime * 10))" as NSString
+        if let cached = Self.thumbnailCache.object(forKey: cacheKey) {
+            thumbnail = cached
+            return
+        }
 
         let asset = AVAsset(url: url)
         let imageGenerator = AVAssetImageGenerator(asset: asset)
@@ -314,6 +334,7 @@ struct RegionRowView: View {
                 let nsImage = NSImage(cgImage: cgImage, size: NSSize(width: 60, height: 40))
 
                 await MainActor.run {
+                    Self.thumbnailCache.setObject(nsImage, forKey: cacheKey)
                     self.thumbnail = nsImage
                 }
             } catch {

@@ -24,18 +24,15 @@ struct WaveformSegment {
     let xStart: CGFloat
     let xEnd: CGFloat
     var isBinned: Bool = false
-    var isDimmed: Bool = false   // e.g. unplayed portion in the player view
 }
 
 extension WaveformSegment {
     /// Segments for a linear timeline (time 0...duration mapped to 0...width),
-    /// split wherever the binned state changes, and optionally at a playhead
-    /// time (before the playhead = full brightness, after = dimmed).
+    /// split wherever the binned state changes.
     static func linearTimeline(
         duration: Double,
         width: CGFloat,
-        regions: [Region],
-        dimAfter playheadTime: Double? = nil
+        regions: [Region]
     ) -> [WaveformSegment] {
         guard duration > 0, width > 0 else { return [] }
 
@@ -43,9 +40,6 @@ extension WaveformSegment {
         for region in regions where region.isBinned {
             boundaries.insert(min(max(region.startTime, 0), duration))
             boundaries.insert(min(max(region.endTime, 0), duration))
-        }
-        if let playheadTime, playheadTime > 0, playheadTime < duration {
-            boundaries.insert(playheadTime)
         }
 
         let sorted = boundaries.sorted()
@@ -56,14 +50,12 @@ extension WaveformSegment {
             let isBinned = regions.contains {
                 $0.isBinned && mid >= $0.startTime && mid < $0.endTime
             }
-            let isDimmed = playheadTime.map { mid > $0 } ?? false
             segments.append(WaveformSegment(
                 timeStart: start,
                 timeEnd: end,
                 xStart: CGFloat(start / duration) * width,
                 xEnd: CGFloat(end / duration) * width,
-                isBinned: isBinned,
-                isDimmed: isDimmed
+                isBinned: isBinned
             ))
         }
         return segments
@@ -128,13 +120,12 @@ enum WaveformRenderer {
         let rms: Color
         let centerLine: Color
 
-        static func palette(isBinned: Bool, isDimmed: Bool) -> Palette {
+        static func palette(isBinned: Bool) -> Palette {
             let base: Color = isBinned ? .red : .green
-            let dim: Double = isDimmed ? 0.45 : 1.0
             return Palette(
-                peak: base.opacity(0.45 * dim),
-                rms: base.opacity(0.95 * dim),
-                centerLine: base.opacity(0.8 * dim)
+                peak: base.opacity(0.45),
+                rms: base.opacity(0.95),
+                centerLine: base.opacity(0.8)
             )
         }
     }
@@ -161,7 +152,7 @@ enum WaveformRenderer {
 
         let midY = height / 2
         let amplitude = midY * 0.95 * gain
-        let palette = Palette.palette(isBinned: segment.isBinned, isDimmed: segment.isDimmed)
+        let palette = Palette.palette(isBinned: segment.isBinned)
 
         // Outer min/max peak shape
         let peakPath = filledShape(

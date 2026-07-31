@@ -251,6 +251,9 @@ struct AudioVisualizationView: View {
 
 /// Full-size player waveform: played portion at full brightness, upcoming
 /// portion dimmed, binned regions red, with a playhead line.
+///
+/// The waveform itself is static during playback — only the dim overlay and
+/// playhead move — so the peak cache isn't re-aggregated 20x/second.
 struct PlayerWaveformView: View {
     let data: WaveformData
     let currentTime: Double
@@ -265,16 +268,19 @@ struct PlayerWaveformView: View {
                 : 0
 
             ZStack(alignment: .topLeading) {
-                WaveformCanvasView(
+                StaticPlayerWaveform(
                     data: data,
-                    segments: WaveformSegment.linearTimeline(
-                        duration: duration,
-                        width: width,
-                        regions: regions,
-                        dimAfter: currentTime
-                    ),
-                    targetFill: WaveformFill.player
+                    regions: regions,
+                    duration: duration,
+                    width: width
                 )
+                .equatable()
+
+                // Dim the unplayed portion
+                Rectangle()
+                    .fill(Color.black.opacity(0.55))
+                    .frame(width: max(0, width - playheadX), height: geometry.size.height)
+                    .offset(x: playheadX)
 
                 Rectangle()
                     .fill(Color.red)
@@ -282,6 +288,34 @@ struct PlayerWaveformView: View {
                     .offset(x: playheadX - 1)
             }
         }
+    }
+}
+
+/// Equatable wrapper so SwiftUI skips redrawing the waveform canvas when
+/// only the playback position changed.
+struct StaticPlayerWaveform: View, Equatable {
+    let data: WaveformData
+    let regions: [Region]
+    let duration: Double
+    let width: CGFloat
+
+    static func == (lhs: StaticPlayerWaveform, rhs: StaticPlayerWaveform) -> Bool {
+        lhs.duration == rhs.duration
+            && lhs.width == rhs.width
+            && lhs.regions == rhs.regions
+            && lhs.data.bucketCount == rhs.data.bucketCount
+    }
+
+    var body: some View {
+        WaveformCanvasView(
+            data: data,
+            segments: WaveformSegment.linearTimeline(
+                duration: duration,
+                width: width,
+                regions: regions
+            ),
+            targetFill: WaveformFill.player
+        )
     }
 }
 

@@ -140,7 +140,7 @@ struct ZoomSlider: View {
     @Binding var zoom: Double
 
     var body: some View {
-        Slider(value: $zoom, in: 0.5...10.0)
+        Slider(value: $zoom, in: 1.0...10.0)
             .gesture(
                 TapGesture(count: 2)
                     .onEnded {
