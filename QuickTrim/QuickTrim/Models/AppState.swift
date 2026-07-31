@@ -188,8 +188,10 @@ class AppState: ObservableObject {
                 if let videoTrack = videoTracks.first {
                     // Has video track - treat as video file
                     self.isAudioOnly = false
+                    // Some variable-frame-rate files report 0; fall back so
+                    // frame stepping (1/frameRate) never divides by zero.
                     let nominalFrameRate = try await videoTrack.load(.nominalFrameRate)
-                    self.frameRate = Double(nominalFrameRate)
+                    self.frameRate = nominalFrameRate > 0 ? Double(nominalFrameRate) : 30.0
 
                     // Load native video size (accounting for rotation)
                     let naturalSize = try await videoTrack.load(.naturalSize)
@@ -202,7 +204,10 @@ class AppState: ObservableObject {
                     self.frameRate = 30.0  // Use standard rate for UI timeline
                 } else {
                     // No usable tracks
-                    print("Error: No video or audio tracks found")
+                    self.presentOpenFailure(
+                        for: url,
+                        reason: "The file contains no playable video or audio."
+                    )
                     return
                 }
 
@@ -212,7 +217,7 @@ class AppState: ObservableObject {
                 self.redoStack = []
 
             } catch {
-                print("Error loading media: \(error)")
+                self.presentOpenFailure(for: url, reason: error.localizedDescription)
             }
         }
 
@@ -236,6 +241,19 @@ class AppState: ObservableObject {
                 self?.isPlaying = status == .playing
             }
             .store(in: &cancellables)
+    }
+
+    /// Tell the user a file couldn't be opened and reset to the drop zone
+    /// instead of leaving the window half-loaded.
+    private func presentOpenFailure(for url: URL, reason: String) {
+        cleanUp()
+
+        let alert = NSAlert()
+        alert.messageText = "Could Not Open \u{201C}\(url.lastPathComponent)\u{201D}"
+        alert.informativeText = reason
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: "OK")
+        alert.runModal()
     }
 
     func cleanUp() {
@@ -347,20 +365,6 @@ class AppState: ObservableObject {
         }
 
         return regions.first { $0.contains(time: clampedTime) }
-    }
-
-    func binRegionLeftOfPlayhead() {
-        guard let index = regions.lastIndex(where: { $0.endTime <= currentTime + Self.timeTolerance }) else { return }
-
-        saveStateForUndo()
-        regions[index].isBinned = true
-    }
-
-    func binRegionRightOfPlayhead() {
-        guard let index = regions.firstIndex(where: { $0.startTime >= currentTime - Self.timeTolerance }) else { return }
-
-        saveStateForUndo()
-        regions[index].isBinned = true
     }
 
     // MARK: - Undo/Redo
@@ -479,6 +483,10 @@ class AppState: ObservableObject {
 
     /// Seek and briefly play audio for skimming feedback (FCP-style)
     func skimTo(time: Double) {
+        // Never hijack real playback: hovering the timeline while playing
+        // would otherwise seek the playhead and pause 150ms later.
+        if isPlaying && !isSkimming { return }
+
         seek(to: time)
 
         // Play audio briefly during skimming for all media types
@@ -600,7 +608,8 @@ class AppState: ObservableObject {
     }
 
     func zoomOut() {
-        timelineZoom = max(timelineZoom / 1.5, 0.5)
+        // 100% is the floor: the timeline never renders below window width
+        timelineZoom = max(timelineZoom / 1.5, 1.0)
     }
 
     // MARK: - File Operations

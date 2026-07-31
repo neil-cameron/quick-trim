@@ -107,7 +107,9 @@ class VideoExporter {
 
         // Add composition tracks
         var compositionVideoTrack: AVMutableCompositionTrack?
-        var compositionAudioTrack: AVMutableCompositionTrack?
+        // Keep every audio track (screen recordings often carry mic +
+        // system audio as separate tracks), paired with its source track.
+        var audioTrackPairs: [(source: AVAssetTrack, destination: AVMutableCompositionTrack)] = []
 
         if videoTracks.first != nil {
             compositionVideoTrack = composition.addMutableTrack(
@@ -116,11 +118,15 @@ class VideoExporter {
             )
         }
 
-        if !options.removeAudio, audioTracks.first != nil {
-            compositionAudioTrack = composition.addMutableTrack(
-                withMediaType: .audio,
-                preferredTrackID: kCMPersistentTrackID_Invalid
-            )
+        if !options.removeAudio {
+            for sourceAudioTrack in audioTracks {
+                if let destination = composition.addMutableTrack(
+                    withMediaType: .audio,
+                    preferredTrackID: kCMPersistentTrackID_Invalid
+                ) {
+                    audioTrackPairs.append((sourceAudioTrack, destination))
+                }
+            }
         }
 
         // Insert time ranges from each region
@@ -142,11 +148,8 @@ class VideoExporter {
                     )
                 }
 
-                // Insert audio if available and not removing audio
-                if !options.removeAudio,
-                   let sourceAudioTrack = audioTracks.first,
-                   let audioTrack = compositionAudioTrack {
-                    try audioTrack.insertTimeRange(
+                for (sourceAudioTrack, destinationTrack) in audioTrackPairs {
+                    try destinationTrack.insertTimeRange(
                         timeRange,
                         of: sourceAudioTrack,
                         at: currentTime
@@ -312,9 +315,19 @@ class VideoExporter {
         // Remove existing file if any (from failed passthrough attempt)
         try? FileManager.default.removeItem(at: outputURL)
 
-        // Determine preset based on whether this is audio-only
-        let isAudioOnly = [.m4a, .aiff, .wav, .mp3].contains(outputFileType)
-        let presetName = isAudioOnly ? AVAssetExportPresetAppleM4A : AVAssetExportPresetHighestQuality
+        // Determine preset based on whether this is audio-only.
+        // AppleM4A only writes .m4a containers; WAV/AIFF hold LPCM already,
+        // so passthrough is the correct (and lossless) writer for them —
+        // pairing AppleM4A with a .wav/.aiff file type fails the session.
+        let presetName: String
+        switch outputFileType {
+        case .m4a:
+            presetName = AVAssetExportPresetAppleM4A
+        case .wav, .aiff:
+            presetName = AVAssetExportPresetPassthrough
+        default:
+            presetName = AVAssetExportPresetHighestQuality
+        }
 
         guard let exportSession = AVAssetExportSession(
             asset: composition,

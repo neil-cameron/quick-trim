@@ -5,6 +5,7 @@
 
 import SwiftUI
 import AVKit
+import UniformTypeIdentifiers
 
 struct ContentView: View {
     @EnvironmentObject var appState: AppState
@@ -99,7 +100,7 @@ struct DropZoneView: View {
                 .foregroundColor(isTargeted ? .accentColor : .secondary.opacity(0.5))
                 .padding(40)
         )
-        .onDrop(of: [.fileURL], isTargeted: $isTargeted) { providers in
+        .onDrop(of: [.movie, .video, .audio], isTargeted: $isTargeted) { providers in
             guard let provider = providers.first else { return false }
 
             _ = provider.loadObject(ofClass: URL.self) { url, error in
