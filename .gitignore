@@ -75,3 +75,6 @@ Temporary Items
 
 # Claude
 .claude/
+
+# Local build output
+Builds/
