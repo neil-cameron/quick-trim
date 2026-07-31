@@ -109,13 +109,15 @@ struct WaveformCanvasView: View {
     var targetFill: Float = WaveformFill.timeline
 
     var body: some View {
+        // No .drawingGroup() here: it rasterizes the whole canvas into one
+        // Metal texture, and a zoomed timeline can exceed the GPU's maximum
+        // texture size (16384px), which blanks the strip entirely.
         Canvas { context, size in
             let gain = data.normalizationGain(targetFill: targetFill)
             for segment in segments {
                 WaveformRenderer.draw(segment: segment, data: data, in: &context, height: size.height, gain: gain)
             }
         }
-        .drawingGroup()
     }
 }
 
