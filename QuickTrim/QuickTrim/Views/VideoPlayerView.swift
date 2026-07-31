@@ -179,6 +179,7 @@ struct AudioVisualizationView: View {
     @EnvironmentObject var appState: AppState
     @State private var waveformData: WaveformData?
     @State private var isLoading = true
+    @State private var loadTask: Task<Void, Never>?
 
     var body: some View {
         GeometryReader { geometry in
@@ -196,9 +197,9 @@ struct AudioVisualizationView: View {
                     }
                 } else if let data = waveformData {
                     // Static waveform centered in view
-                    PlayerWaveformCanvas(
-                        samples: data.samples,
-                        playbackPosition: appState.duration > 0 ? appState.currentTime / appState.duration : 0,
+                    PlayerWaveformView(
+                        data: data,
+                        currentTime: appState.currentTime,
                         regions: appState.regions,
                         duration: appState.duration
                     )
@@ -227,19 +228,18 @@ struct AudioVisualizationView: View {
         guard let url = appState.videoURL else { return }
         isLoading = true
         waveformData = nil
+        loadTask?.cancel()
 
-        Task {
+        loadTask = Task {
             do {
-                // Use rough waveform for faster loading - same method as timeline for consistency
-                let data = try await WaveformGenerator.generateRoughWaveform(
-                    from: url,
-                    totalSamples: 800  // Double resolution for player view
-                )
+                let data = try await WaveformCache.shared.waveform(for: url)
+                if Task.isCancelled { return }
                 await MainActor.run {
                     self.waveformData = data
                     self.isLoading = false
                 }
             } catch {
+                if Task.isCancelled { return }
                 print("Waveform generation failed: \(error)")
                 await MainActor.run {
                     self.isLoading = false
@@ -249,53 +249,38 @@ struct AudioVisualizationView: View {
     }
 }
 
-struct PlayerWaveformCanvas: View {
-    let samples: [Float]
-    let playbackPosition: Double  // 0.0 to 1.0
+/// Full-size player waveform: played portion at full brightness, upcoming
+/// portion dimmed, binned regions red, with a playhead line.
+struct PlayerWaveformView: View {
+    let data: WaveformData
+    let currentTime: Double
     let regions: [Region]
     let duration: Double
 
     var body: some View {
-        Canvas { context, size in
-            let midY = size.height / 2
-            let barWidth = max(1, size.width / CGFloat(samples.count))
+        GeometryReader { geometry in
+            let width = geometry.size.width
+            let playheadX = duration > 0
+                ? CGFloat(currentTime / duration) * width
+                : 0
 
-            for (index, sample) in samples.enumerated() {
-                let x = CGFloat(index) * barWidth
-                let normalizedTime = Double(index) / Double(max(1, samples.count)) * duration
-                let barHeight = CGFloat(abs(sample)) * midY * 0.9
-
-                // Determine if this sample is in a binned region
-                let isBinned = regions.contains { region in
-                    region.isBinned &&
-                    normalizedTime >= region.startTime &&
-                    normalizedTime < region.endTime
-                }
-
-                // Color based on playback position and binned status
-                let normalizedPosition = CGFloat(index) / CGFloat(max(1, samples.count))
-                let baseColor: Color = isBinned ? .red : .green
-                let color: Color = normalizedPosition < playbackPosition
-                    ? baseColor
-                    : baseColor.opacity(0.4)
-
-                // Draw symmetric bar
-                let rect = CGRect(
-                    x: x,
-                    y: midY - barHeight,
-                    width: max(barWidth - 0.5, 1),
-                    height: barHeight * 2
+            ZStack(alignment: .topLeading) {
+                WaveformCanvasView(
+                    data: data,
+                    segments: WaveformSegment.linearTimeline(
+                        duration: duration,
+                        width: width,
+                        regions: regions,
+                        dimAfter: currentTime
+                    ),
+                    targetFill: WaveformFill.player
                 )
-                context.fill(Path(rect), with: .color(color))
-            }
 
-            // Draw playhead line
-            let playheadX = size.width * playbackPosition
-            let playheadPath = Path { path in
-                path.move(to: CGPoint(x: playheadX, y: 0))
-                path.addLine(to: CGPoint(x: playheadX, y: size.height))
+                Rectangle()
+                    .fill(Color.red)
+                    .frame(width: 2, height: geometry.size.height)
+                    .offset(x: playheadX - 1)
             }
-            context.stroke(playheadPath, with: .color(.red), lineWidth: 2)
         }
     }
 }

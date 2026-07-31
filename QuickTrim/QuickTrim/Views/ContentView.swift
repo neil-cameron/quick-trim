@@ -8,9 +8,17 @@ import AVKit
 
 struct ContentView: View {
     @EnvironmentObject var appState: AppState
-    @State private var timelineHeight: CGFloat = 156
 
     private let regionsPaneWidth: CGFloat = 280
+
+    /// Video files with audio get a taller timeline to fit the waveform
+    /// strip beneath the frame thumbnails.
+    private var timelineHeight: CGFloat {
+        if !appState.isAudioOnly && appState.hasAudioTrack {
+            return 156 + VideoWaveformLayout.stripHeight
+        }
+        return 156
+    }
 
     var body: some View {
         ZStack {

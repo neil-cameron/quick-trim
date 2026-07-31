@@ -20,6 +20,7 @@ class AppState: ObservableObject {
     @Published var frameRate: Double = 30
     @Published var isPlaying: Bool = false
     @Published var isAudioOnly: Bool = false
+    @Published var hasAudioTrack: Bool = false
 
     // Regions
     @Published var regions: [Region] = []
@@ -182,6 +183,8 @@ class AppState: ObservableObject {
                 let videoTracks = try await asset.loadTracks(withMediaType: .video)
                 let audioTracks = try await asset.loadTracks(withMediaType: .audio)
 
+                self.hasAudioTrack = audioTracks.first != nil
+
                 if let videoTrack = videoTracks.first {
                     // Has video track - treat as video file
                     self.isAudioOnly = false
@@ -253,6 +256,7 @@ class AppState: ObservableObject {
         duration = 0
         currentTime = 0
         isAudioOnly = false
+        hasAudioTrack = false
         videoNativeSize = .zero
         cropLeft = 0
         cropTop = 0

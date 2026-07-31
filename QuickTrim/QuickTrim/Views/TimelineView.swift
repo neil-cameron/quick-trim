@@ -500,6 +500,15 @@ struct NormalThumbnailTrackView: View {
             // Thumbnails or Waveform based on media type
             if appState.isAudioOnly {
                 WaveformStripView(width: width, height: height - statusBarHeight)
+            } else if appState.hasAudioTrack {
+                // Video with audio: frame thumbnails with waveform beneath
+                VStack(alignment: .leading, spacing: 0) {
+                    ThumbnailStripView(
+                        width: width,
+                        height: height - statusBarHeight - VideoWaveformLayout.stripHeight
+                    )
+                    WaveformStripView(width: width, height: VideoWaveformLayout.stripHeight)
+                }
             } else {
                 ThumbnailStripView(width: width, height: height - statusBarHeight)
             }
@@ -531,6 +540,22 @@ struct PreviewThumbnailTrackView: View {
                     width: width,
                     height: height - statusBarHeight
                 )
+            } else if appState.hasAudioTrack {
+                // Video with audio: frame thumbnails with waveform beneath
+                VStack(alignment: .leading, spacing: 0) {
+                    PreviewThumbnailStripView(
+                        keptRegions: keptRegions,
+                        previewDuration: previewDuration,
+                        width: width,
+                        height: height - statusBarHeight - VideoWaveformLayout.stripHeight
+                    )
+                    PreviewWaveformStripView(
+                        keptRegions: keptRegions,
+                        previewDuration: previewDuration,
+                        width: width,
+                        height: VideoWaveformLayout.stripHeight
+                    )
+                }
             } else {
                 PreviewThumbnailStripView(
                     keptRegions: keptRegions,
@@ -626,6 +651,11 @@ struct ThumbnailStripView: View {
                     .clipped()
             }
         }
+        // The tile count is rounded up, so the strip can naturally overflow
+        // the requested width; clamp it so it never widens its container
+        // (which would shift region overlays out of alignment).
+        .frame(width: width, height: height, alignment: .leading)
+        .clipped()
         .onAppear {
             generateThumbnailsIfNeeded()
         }
@@ -736,6 +766,10 @@ struct PreviewThumbnailStripView: View {
                     .clipped()
             }
         }
+        // Same width clamp as ThumbnailStripView — the rounded-up tile count
+        // must not widen the container.
+        .frame(width: width, height: height, alignment: .leading)
+        .clipped()
         .onAppear {
             generateThumbnailsIfNeeded()
         }
@@ -816,14 +850,15 @@ struct PreviewThumbnailStripView: View {
     }
 }
 
-// MARK: - Waveform Strip (Normal mode - for audio files)
+// MARK: - Waveform Strip (Normal mode)
 
+/// Timeline waveform for the full duration. Data comes from the shared
+/// decode-once WaveformCache, so zoom/width changes only redraw — they
+/// never re-read the file.
 struct WaveformStripView: View {
     @EnvironmentObject var appState: AppState
     @State private var waveformData: WaveformData?
-    @State private var lastGeneratedURL: URL?
-    @State private var generationTask: Task<Void, Never>?
-    @State private var debounceTask: Task<Void, Never>?
+    @State private var loadTask: Task<Void, Never>?
 
     let width: CGFloat
     let height: CGFloat
@@ -831,122 +866,62 @@ struct WaveformStripView: View {
     var body: some View {
         ZStack {
             if let data = waveformData {
-                TimelineWaveformCanvas(
-                    samples: data.samples,
-                    regions: appState.regions,
-                    duration: appState.duration,
-                    width: width,
-                    height: height
+                WaveformCanvasView(
+                    data: data,
+                    segments: WaveformSegment.linearTimeline(
+                        duration: appState.duration,
+                        width: width,
+                        regions: appState.regions
+                    )
                 )
             } else {
                 Rectangle()
                     .fill(Color.black.opacity(0.3))
                 ProgressView()
+                    .controlSize(.small)
             }
         }
         .frame(width: width, height: height)
         .onAppear {
-            scheduleGeneration(urlChanged: true)
+            loadWaveform()
         }
         .onChange(of: appState.videoURL) { _, _ in
-            lastGeneratedURL = nil
             waveformData = nil
-            scheduleGeneration(urlChanged: true)
-        }
-        .onChange(of: width) { _, _ in
-            scheduleGeneration(urlChanged: false)
-        }
-    }
-
-    private func scheduleGeneration(urlChanged: Bool) {
-        debounceTask?.cancel()
-        debounceTask = Task { @MainActor in
-            try? await Task.sleep(nanoseconds: 50_000_000) // 50ms debounce
-            if !Task.isCancelled {
-                loadWaveform()
-            }
+            loadWaveform()
         }
     }
 
     private func loadWaveform() {
-        guard let url = appState.videoURL, appState.duration > 0 else { return }
+        guard let url = appState.videoURL else { return }
+        loadTask?.cancel()
 
-        // Cancel any in-flight generation
-        generationTask?.cancel()
-
-        lastGeneratedURL = url
-        let capturedWidth = width
         let capturedDuration = appState.duration
-
-        generationTask = Task {
+        loadTask = Task {
+            let data: WaveformData
             do {
-                let samplesNeeded = max(200, Int(capturedWidth / 2))
-                let data = try await WaveformGenerator.generateRoughWaveform(
-                    from: url,
-                    totalSamples: samplesNeeded
-                )
-                if !Task.isCancelled {
-                    await MainActor.run {
-                        self.waveformData = data
-                    }
-                }
+                data = try await WaveformCache.shared.waveform(for: url)
             } catch {
-                if !Task.isCancelled {
-                    print("Waveform generation failed: \(error)")
-                    await MainActor.run {
-                        self.waveformData = WaveformData(samples: [0], duration: capturedDuration)
-                    }
+                if Task.isCancelled { return }
+                print("Waveform generation failed: \(error)")
+                data = .silence(duration: capturedDuration)
+            }
+            if !Task.isCancelled {
+                await MainActor.run {
+                    self.waveformData = data
                 }
             }
         }
     }
 }
 
-struct TimelineWaveformCanvas: View {
-    let samples: [Float]
-    let regions: [Region]
-    let duration: Double
-    let width: CGFloat
-    let height: CGFloat
+// MARK: - Preview Waveform Strip (collapsed mode)
 
-    var body: some View {
-        Canvas { context, size in
-            let midY = size.height / 2
-            let barWidth = max(1, size.width / CGFloat(max(1, samples.count)))
-
-            for (index, sample) in samples.enumerated() {
-                let x = CGFloat(index) * barWidth
-                let normalizedTime = Double(index) / Double(max(1, samples.count)) * duration
-
-                // Determine if this sample is in a binned region
-                let isBinned = regions.contains { region in
-                    region.isBinned &&
-                    normalizedTime >= region.startTime &&
-                    normalizedTime < region.endTime
-                }
-
-                let barHeight = CGFloat(abs(sample)) * midY * 0.9
-                let color: Color = isBinned ? .red.opacity(0.5) : .green
-
-                let rect = CGRect(
-                    x: x,
-                    y: midY - barHeight,
-                    width: max(barWidth - 0.5, 1),
-                    height: barHeight * 2
-                )
-                context.fill(Path(rect), with: .color(color))
-            }
-        }
-    }
-}
-
-// MARK: - Preview Waveform Strip (collapsed mode - for audio files)
-
+/// Waveform for preview mode: kept regions rendered contiguously from the
+/// same shared peak cache (no re-decode when regions change).
 struct PreviewWaveformStripView: View {
     @EnvironmentObject var appState: AppState
     @State private var waveformData: WaveformData?
-    @State private var generationTask: Task<Void, Never>?
-    @State private var debounceTask: Task<Void, Never>?
+    @State private var loadTask: Task<Void, Never>?
 
     let keptRegions: [Region]
     let previewDuration: Double
@@ -956,121 +931,48 @@ struct PreviewWaveformStripView: View {
     var body: some View {
         ZStack {
             if let data = waveformData {
-                PreviewWaveformCanvas(
-                    samples: data.samples,
-                    width: width,
-                    height: height
+                WaveformCanvasView(
+                    data: data,
+                    segments: WaveformSegment.previewTimeline(
+                        keptRegions: keptRegions,
+                        width: width
+                    )
                 )
             } else {
                 Rectangle()
                     .fill(Color.black.opacity(0.3))
                 ProgressView()
+                    .controlSize(.small)
             }
         }
         .frame(width: width, height: height)
         .onAppear {
-            scheduleGeneration()
+            loadWaveform()
         }
-        .onChange(of: keptRegions.map { $0.id }) { _, _ in
-            scheduleGeneration()
-        }
-        .onChange(of: width) { _, _ in
-            scheduleGeneration()
+        .onChange(of: appState.videoURL) { _, _ in
+            waveformData = nil
+            loadWaveform()
         }
     }
 
-    /// Debounce rapid calls (e.g. from onAppear + onChange firing together)
-    /// so only one generation task runs after things settle.
-    private func scheduleGeneration() {
-        debounceTask?.cancel()
-        debounceTask = Task { @MainActor in
-            try? await Task.sleep(nanoseconds: 50_000_000) // 50ms debounce
-            if !Task.isCancelled {
-                generatePreviewWaveform()
-            }
-        }
-    }
+    private func loadWaveform() {
+        guard let url = appState.videoURL else { return }
+        loadTask?.cancel()
 
-    private func generatePreviewWaveform() {
-        guard let url = appState.videoURL,
-              previewDuration > 0 else {
-            return
-        }
-
-        // Cancel any in-flight generation
-        generationTask?.cancel()
-        let capturedWidth = width
-        let capturedRegions = keptRegions
-        let capturedPreviewDuration = previewDuration
-
-        generationTask = Task {
+        let capturedDuration = previewDuration
+        loadTask = Task {
+            let data: WaveformData
             do {
-                let samplesNeeded = max(200, Int(capturedWidth / 2))
-                let fullData = try await WaveformGenerator.generateRoughWaveform(
-                    from: url,
-                    totalSamples: samplesNeeded
-                )
-
-                if Task.isCancelled { return }
-
-                // Extract samples for kept regions only
-                var previewSamples: [Float] = []
-                let samplesPerSecondActual = Double(fullData.samples.count) / fullData.duration
-
-                for region in capturedRegions {
-                    let startIndex = Int(region.startTime * samplesPerSecondActual)
-                    let endIndex = Int(region.endTime * samplesPerSecondActual)
-                    let clampedStart = max(0, min(startIndex, fullData.samples.count - 1))
-                    let clampedEnd = max(0, min(endIndex, fullData.samples.count))
-
-                    if clampedStart < clampedEnd {
-                        previewSamples.append(contentsOf: fullData.samples[clampedStart..<clampedEnd])
-                    }
-                }
-
-                if Task.isCancelled { return }
-
-                let previewData = WaveformData(
-                    samples: previewSamples.isEmpty ? [0] : previewSamples,
-                    duration: capturedPreviewDuration
-                )
-
-                await MainActor.run {
-                    self.waveformData = previewData
-                }
+                data = try await WaveformCache.shared.waveform(for: url)
             } catch {
-                if !Task.isCancelled {
-                    print("Preview waveform generation failed: \(error)")
-                    await MainActor.run {
-                        self.waveformData = WaveformData(samples: [0], duration: capturedPreviewDuration)
-                    }
-                }
+                if Task.isCancelled { return }
+                print("Waveform generation failed: \(error)")
+                data = .silence(duration: capturedDuration)
             }
-        }
-    }
-}
-
-struct PreviewWaveformCanvas: View {
-    let samples: [Float]
-    let width: CGFloat
-    let height: CGFloat
-
-    var body: some View {
-        Canvas { context, size in
-            let midY = size.height / 2
-            let barWidth = max(1, size.width / CGFloat(max(1, samples.count)))
-
-            for (index, sample) in samples.enumerated() {
-                let x = CGFloat(index) * barWidth
-                let barHeight = CGFloat(abs(sample)) * midY * 0.9
-
-                let rect = CGRect(
-                    x: x,
-                    y: midY - barHeight,
-                    width: max(barWidth - 0.5, 1),
-                    height: barHeight * 2
-                )
-                context.fill(Path(rect), with: .color(.green))
+            if !Task.isCancelled {
+                await MainActor.run {
+                    self.waveformData = data
+                }
             }
         }
     }

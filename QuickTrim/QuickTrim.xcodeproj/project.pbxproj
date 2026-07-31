@@ -18,6 +18,7 @@
 		A100000F263E8F5C00000001 /* RegionsPaneView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1000010263E8F5C00000001 /* RegionsPaneView.swift */; };
 		A1000011263E8F5C00000001 /* VideoExporter.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1000012263E8F5C00000001 /* VideoExporter.swift */; };
 		A1C00001263E8F5C00000001 /* CropOverlayView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1C00002263E8F5C00000001 /* CropOverlayView.swift */; };
+		A1D00001263E8F5C00000001 /* WaveformRendererView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1D00002263E8F5C00000001 /* WaveformRendererView.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -35,6 +36,7 @@
 		A1000014263E8F5C00000001 /* QuickTrim.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = QuickTrim.entitlements; sourceTree = "<group>"; };
 		A1000015263E8F5C00000001 /* QuickTrim.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = QuickTrim.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		A1C00002263E8F5C00000001 /* CropOverlayView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CropOverlayView.swift; sourceTree = "<group>"; };
+		A1D00002263E8F5C00000001 /* WaveformRendererView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WaveformRendererView.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -86,6 +88,7 @@
 				A100000E263E8F5C00000001 /* TimelineView.swift */,
 				A1000010263E8F5C00000001 /* RegionsPaneView.swift */,
 				A1C00002263E8F5C00000001 /* CropOverlayView.swift */,
+				A1D00002263E8F5C00000001 /* WaveformRendererView.swift */,
 			);
 			path = Views;
 			sourceTree = "<group>";
@@ -187,6 +190,7 @@
 				A100000F263E8F5C00000001 /* RegionsPaneView.swift in Sources */,
 				A1000011263E8F5C00000001 /* VideoExporter.swift in Sources */,
 				A1C00001263E8F5C00000001 /* CropOverlayView.swift in Sources */,
+				A1D00001263E8F5C00000001 /* WaveformRendererView.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

@@ -2,19 +2,60 @@
 //  WaveformGenerator.swift
 //  QuickTrim
 //
+//  Decodes a file's audio once into a high-resolution peak cache
+//  (per-bucket min/max + RMS), from which any zoom level can be
+//  rendered without touching the file again.
+//
 
 import Foundation
 import AVFoundation
 
+/// High-resolution waveform peak cache.
+///
+/// Each bucket summarises a fixed slice of time (a few milliseconds) with the
+/// minimum sample, maximum sample, and RMS level in that slice. Rendering at
+/// any width/zoom aggregates or interpolates these buckets — the audio file
+/// is only ever decoded once.
 struct WaveformData {
-    let samples: [Float]  // Normalized -1.0 to 1.0
+    let minSamples: [Float]   // per-bucket minimum, -1.0...0.0
+    let maxSamples: [Float]   // per-bucket maximum, 0.0...1.0
+    let rmsSamples: [Float]   // per-bucket RMS, 0.0...1.0
     let duration: Double
+    let peakLevel: Float      // loudest |sample| in the whole file, 0.0...1.0
+
+    var bucketCount: Int { maxSamples.count }
+
+    var bucketsPerSecond: Double {
+        duration > 0 ? Double(bucketCount) / duration : 0
+    }
+
+    /// Gain that scales the file's loudest peak up to `targetFill` of the
+    /// available half-height (peak normalization, like Logic). Never shrinks
+    /// full-scale audio, and caps the boost so near-silent files don't
+    /// explode into noise.
+    func normalizationGain(targetFill: Float, maxBoost: Float = 10) -> CGFloat {
+        guard peakLevel > 0 else { return 1 }
+        return CGFloat(min(max(targetFill / peakLevel, 1), maxBoost))
+    }
+
+    static let empty = WaveformData(minSamples: [], maxSamples: [], rmsSamples: [], duration: 0, peakLevel: 0)
+
+    /// Silent waveform of a given duration (fallback when decoding fails).
+    static func silence(duration: Double) -> WaveformData {
+        let count = 100
+        return WaveformData(
+            minSamples: Array(repeating: 0, count: count),
+            maxSamples: Array(repeating: 0, count: count),
+            rmsSamples: Array(repeating: 0, count: count),
+            duration: duration,
+            peakLevel: 0
+        )
+    }
 }
 
 enum WaveformError: LocalizedError {
     case noAudioTrack
     case readingFailed
-    case invalidFormat
 
     var errorDescription: String? {
         switch self {
@@ -22,80 +63,133 @@ enum WaveformError: LocalizedError {
             return "No audio track found"
         case .readingFailed:
             return "Failed to read audio data"
-        case .invalidFormat:
-            return "Invalid audio format"
         }
     }
 }
 
-class WaveformGenerator {
+/// Process-wide cache so the timeline, preview strip, and player view all
+/// share a single decode per file, and zoom/resize never re-reads the file.
+actor WaveformCache {
+    static let shared = WaveformCache()
 
-    /// Fast rough waveform generation using streaming with skip
-    /// Reads file sequentially but only processes a fraction of the audio data
-    /// - Parameters:
-    ///   - url: Source file URL
-    ///   - totalSamples: Total number of output samples to generate
-    /// - Returns: WaveformData containing normalized samples
-    static func generateRoughWaveform(
-        from url: URL,
-        totalSamples: Int = 200
-    ) async throws -> WaveformData {
+    private var tasks: [URL: Task<WaveformData, Error>] = [:]
+    private var order: [URL] = []
+    private let maxEntries = 4
+
+    func waveform(for url: URL) async throws -> WaveformData {
+        if let existing = tasks[url] {
+            return try await existing.value
+        }
+
+        let task = Task {
+            try await WaveformGenerator.decode(url: url)
+        }
+        tasks[url] = task
+        order.append(url)
+
+        // Evict oldest entries beyond the cap
+        while order.count > maxEntries {
+            let evicted = order.removeFirst()
+            tasks[evicted]?.cancel()
+            tasks[evicted] = nil
+        }
+
+        do {
+            return try await task.value
+        } catch {
+            // Don't cache failures
+            tasks[url] = nil
+            order.removeAll { $0 == url }
+            throw error
+        }
+    }
+}
+
+enum WaveformGenerator {
+
+    /// Peak-cache resolution: one bucket per 5ms of audio, bounded so very
+    /// short files still get detail and very long files stay in memory budget.
+    private static func bucketCount(for duration: Double) -> Int {
+        let target = Int(duration * 200)
+        return min(max(target, 2_000), 1_500_000)
+    }
+
+    /// Decode the file's audio track into a WaveformData peak cache.
+    /// Reads every sample (no skipping), mixes channels to mono, and uses the
+    /// stream's real sample rate and channel count.
+    static func decode(url: URL) async throws -> WaveformData {
         let asset = AVURLAsset(url: url)
 
-        // Load audio track
         let audioTracks = try await asset.loadTracks(withMediaType: .audio)
         guard let audioTrack = audioTracks.first else {
             throw WaveformError.noAudioTrack
         }
 
-        // Get duration
-        let duration = try await asset.load(.duration)
-        let durationSeconds = CMTimeGetSeconds(duration)
+        let duration = CMTimeGetSeconds(try await asset.load(.duration))
+        guard duration > 0 else { return .empty }
 
-        guard durationSeconds > 0 else {
-            return WaveformData(samples: [], duration: 0)
-        }
-
-        // Create asset reader
         let reader = try AVAssetReader(asset: asset)
-
-        // Configure output settings for PCM
         let outputSettings: [String: Any] = [
             AVFormatIDKey: kAudioFormatLinearPCM,
-            AVLinearPCMBitDepthKey: 16,
+            AVLinearPCMBitDepthKey: 32,
+            AVLinearPCMIsFloatKey: true,
             AVLinearPCMIsBigEndianKey: false,
-            AVLinearPCMIsFloatKey: false,
             AVLinearPCMIsNonInterleaved: false
         ]
-
-        let output = AVAssetReaderTrackOutput(
-            track: audioTrack,
-            outputSettings: outputSettings
-        )
+        let output = AVAssetReaderTrackOutput(track: audioTrack, outputSettings: outputSettings)
+        output.alwaysCopiesSampleData = false
         reader.add(output)
 
         guard reader.startReading() else {
             throw WaveformError.readingFailed
         }
 
-        // Estimate total samples based on typical 44.1kHz stereo
-        let estimatedSampleRate = 44100
-        let estimatedTotalSamples = Int(durationSeconds * Double(estimatedSampleRate) * 2) // stereo
+        // Real stream format (sample rate / channels) from the first buffer
+        var sampleRate: Double = 0
+        var channelCount = 1
 
-        // Calculate how many raw samples per output bucket
-        let samplesPerBucket = max(1, estimatedTotalSamples / totalSamples)
+        let totalBuckets = bucketCount(for: duration)
 
-        // We'll skip most buffers and only process every Nth sample
-        var waveformSamples: [Float] = []
-        waveformSamples.reserveCapacity(totalSamples)
+        var minSamples = [Float](repeating: 0, count: totalBuckets)
+        var maxSamples = [Float](repeating: 0, count: totalBuckets)
+        var rmsSamples = [Float](repeating: 0, count: totalBuckets)
 
-        var totalSamplesRead = 0
-        var currentBucketMax: Int16 = 0
-        var samplesInCurrentBucket = 0
-        let skipFactor = max(1, samplesPerBucket / 100) // Only check every Nth sample for peak
+        var framesPerBucket = 0
+        var bucketIndex = 0
+        var bucketMin: Float = 0
+        var bucketMax: Float = 0
+        var bucketSumSquares: Double = 0
+        var framesInBucket = 0
+
+        func flushBucket() {
+            guard bucketIndex < totalBuckets, framesInBucket > 0 else { return }
+            minSamples[bucketIndex] = bucketMin
+            maxSamples[bucketIndex] = bucketMax
+            rmsSamples[bucketIndex] = Float(sqrt(bucketSumSquares / Double(framesInBucket)))
+            bucketIndex += 1
+            bucketMin = 0
+            bucketMax = 0
+            bucketSumSquares = 0
+            framesInBucket = 0
+        }
 
         while let sampleBuffer = output.copyNextSampleBuffer() {
-            guard let blockBuffer = CMSampleBufferGetDataBuffer(sampleBuffer) else {
+            if Task.isCancelled {
+                reader.cancelReading()
+                throw CancellationError()
+            }
+
+            if sampleRate == 0,
+               let formatDescription = CMSampleBufferGetFormatDescription(sampleBuffer),
+               let asbd = CMAudioFormatDescriptionGetStreamBasicDescription(formatDescription)?.pointee {
+                sampleRate = asbd.mSampleRate
+                channelCount = max(1, Int(asbd.mChannelsPerFrame))
+                let totalFrames = duration * sampleRate
+                framesPerBucket = max(1, Int(totalFrames / Double(totalBuckets)))
+            }
+
+            guard framesPerBucket > 0,
+                  let blockBuffer = CMSampleBufferGetDataBuffer(sampleBuffer) else {
                 continue
             }
 
@@ -108,224 +202,57 @@ class WaveformGenerator {
                 totalLengthOut: &length,
                 dataPointerOut: &dataPointer
             )
+            guard status == kCMBlockBufferNoErr, let dataPointer else { continue }
 
-            guard status == kCMBlockBufferNoErr, let dataPointer = dataPointer else {
-                continue
-            }
+            let floatCount = length / MemoryLayout<Float>.size
+            let frameCount = floatCount / channelCount
 
-            let sampleCount = length / MemoryLayout<Int16>.size
-            dataPointer.withMemoryRebound(to: Int16.self, capacity: sampleCount) { pointer in
-                // Process samples with skip factor for speed
-                var j = 0
-                while j < sampleCount {
-                    let absSample = abs(pointer[j])
-                    if absSample > currentBucketMax {
-                        currentBucketMax = absSample
+            dataPointer.withMemoryRebound(to: Float.self, capacity: floatCount) { floats in
+                for frame in 0..<frameCount {
+                    // Mix interleaved channels to mono
+                    var mono: Float = 0
+                    let base = frame * channelCount
+                    for channel in 0..<channelCount {
+                        mono += floats[base + channel]
                     }
+                    mono /= Float(channelCount)
 
-                    samplesInCurrentBucket += skipFactor
-                    totalSamplesRead += skipFactor
+                    if mono < bucketMin { bucketMin = mono }
+                    if mono > bucketMax { bucketMax = mono }
+                    bucketSumSquares += Double(mono * mono)
+                    framesInBucket += 1
 
-                    // Check if we've filled a bucket
-                    if samplesInCurrentBucket >= samplesPerBucket {
-                        let normalized = Float(currentBucketMax) / Float(Int16.max)
-                        waveformSamples.append(normalized)
-                        currentBucketMax = 0
-                        samplesInCurrentBucket = 0
-
-                        // Stop if we have enough samples
-                        if waveformSamples.count >= totalSamples {
-                            break
-                        }
+                    if framesInBucket >= framesPerBucket {
+                        flushBucket()
                     }
-
-                    j += skipFactor
                 }
             }
-
-            // Stop early if we have enough samples
-            if waveformSamples.count >= totalSamples {
-                break
-            }
         }
 
-        // Add final bucket if there's remaining data
-        if samplesInCurrentBucket > 0 && waveformSamples.count < totalSamples {
-            let normalized = Float(currentBucketMax) / Float(Int16.max)
-            waveformSamples.append(normalized)
-        }
-
+        flushBucket()
         reader.cancelReading()
 
-        // Pad or trim to exact count
-        while waveformSamples.count < totalSamples {
-            waveformSamples.append(waveformSamples.last ?? 0)
-        }
-        if waveformSamples.count > totalSamples {
-            waveformSamples = Array(waveformSamples.prefix(totalSamples))
-        }
-
-        return WaveformData(
-            samples: waveformSamples,
-            duration: durationSeconds
-        )
-    }
-
-    /// Generate waveform samples from an audio/video file
-    /// - Parameters:
-    ///   - url: Source file URL
-    ///   - samplesPerSecond: How many samples to extract per second of audio
-    /// - Returns: WaveformData containing normalized samples
-    static func generateWaveform(
-        from url: URL,
-        samplesPerSecond: Int = 100
-    ) async throws -> WaveformData {
-        let asset = AVURLAsset(url: url)
-
-        // Load audio track
-        let audioTracks = try await asset.loadTracks(withMediaType: .audio)
-        guard let audioTrack = audioTracks.first else {
-            throw WaveformError.noAudioTrack
-        }
-
-        // Get duration
-        let duration = try await asset.load(.duration)
-        let durationSeconds = CMTimeGetSeconds(duration)
-
-        // Create asset reader
-        let reader = try AVAssetReader(asset: asset)
-
-        // Configure output settings for PCM
-        let outputSettings: [String: Any] = [
-            AVFormatIDKey: kAudioFormatLinearPCM,
-            AVLinearPCMBitDepthKey: 16,
-            AVLinearPCMIsBigEndianKey: false,
-            AVLinearPCMIsFloatKey: false,
-            AVLinearPCMIsNonInterleaved: false
-        ]
-
-        let output = AVAssetReaderTrackOutput(
-            track: audioTrack,
-            outputSettings: outputSettings
-        )
-        reader.add(output)
-
-        guard reader.startReading() else {
+        guard bucketIndex > 0 else {
             throw WaveformError.readingFailed
         }
 
-        // Calculate total samples needed
-        let totalSamples = max(1, Int(durationSeconds * Double(samplesPerSecond)))
-
-        // Read and process audio buffers
-        var allSamples: [Int16] = []
-        allSamples.reserveCapacity(Int(durationSeconds * 44100))  // Estimate based on common sample rate
-
-        while let sampleBuffer = output.copyNextSampleBuffer() {
-            guard let blockBuffer = CMSampleBufferGetDataBuffer(sampleBuffer) else {
-                continue
-            }
-
-            var length = 0
-            var dataPointer: UnsafeMutablePointer<Int8>?
-            let status = CMBlockBufferGetDataPointer(
-                blockBuffer,
-                atOffset: 0,
-                lengthAtOffsetOut: nil,
-                totalLengthOut: &length,
-                dataPointerOut: &dataPointer
-            )
-
-            guard status == kCMBlockBufferNoErr, let dataPointer = dataPointer else {
-                continue
-            }
-
-            let sampleCount = length / MemoryLayout<Int16>.size
-            dataPointer.withMemoryRebound(to: Int16.self, capacity: sampleCount) { pointer in
-                let buffer = UnsafeBufferPointer(start: pointer, count: sampleCount)
-                allSamples.append(contentsOf: buffer)
-            }
+        // Trim unfilled tail (decoder can deliver slightly less than duration)
+        if bucketIndex < totalBuckets {
+            minSamples.removeLast(totalBuckets - bucketIndex)
+            maxSamples.removeLast(totalBuckets - bucketIndex)
+            rmsSamples.removeLast(totalBuckets - bucketIndex)
         }
 
-        guard !allSamples.isEmpty else {
-            throw WaveformError.readingFailed
-        }
-
-        // Downsample to target resolution
-        var waveformSamples: [Float] = []
-        waveformSamples.reserveCapacity(totalSamples)
-
-        let samplesPerBucket = max(1, allSamples.count / totalSamples)
-
-        for i in 0..<totalSamples {
-            let startIndex = i * samplesPerBucket
-            let endIndex = min(startIndex + samplesPerBucket, allSamples.count)
-
-            guard startIndex < allSamples.count else {
-                waveformSamples.append(0)
-                continue
-            }
-
-            // Find max absolute value in bucket (peak detection)
-            var maxAbsSample: Int16 = 0
-            for j in startIndex..<endIndex {
-                let absSample = abs(allSamples[j])
-                if absSample > maxAbsSample {
-                    maxAbsSample = absSample
-                }
-            }
-
-            // Normalize to -1.0 to 1.0
-            let normalized = Float(maxAbsSample) / Float(Int16.max)
-            waveformSamples.append(normalized)
-        }
+        let maxPeak = maxSamples.max() ?? 0
+        let minPeak = minSamples.min() ?? 0
+        let peakLevel = max(maxPeak, abs(minPeak))
 
         return WaveformData(
-            samples: waveformSamples,
-            duration: durationSeconds
-        )
-    }
-
-    /// Generate waveform for specific time ranges (for preview mode)
-    /// - Parameters:
-    ///   - url: Source file URL
-    ///   - regions: Array of regions to extract
-    ///   - samplesPerSecond: How many samples to extract per second
-    /// - Returns: WaveformData containing concatenated samples from kept regions
-    static func generateWaveform(
-        from url: URL,
-        forRegions regions: [Region],
-        samplesPerSecond: Int = 100
-    ) async throws -> WaveformData {
-        // Generate full waveform first
-        let fullData = try await generateWaveform(from: url, samplesPerSecond: samplesPerSecond)
-
-        guard !regions.isEmpty else {
-            return fullData
-        }
-
-        // Extract samples for specified regions only
-        var previewSamples: [Float] = []
-        let samplesPerSecondActual = Double(fullData.samples.count) / fullData.duration
-
-        var totalDuration: Double = 0
-
-        for region in regions {
-            let startIndex = Int(region.startTime * samplesPerSecondActual)
-            let endIndex = Int(region.endTime * samplesPerSecondActual)
-            let clampedStart = max(0, min(startIndex, fullData.samples.count - 1))
-            let clampedEnd = max(0, min(endIndex, fullData.samples.count))
-
-            if clampedStart < clampedEnd {
-                previewSamples.append(contentsOf: fullData.samples[clampedStart..<clampedEnd])
-            }
-
-            totalDuration += region.duration
-        }
-
-        return WaveformData(
-            samples: previewSamples,
-            duration: totalDuration
+            minSamples: minSamples,
+            maxSamples: maxSamples,
+            rmsSamples: rmsSamples,
+            duration: duration,
+            peakLevel: peakLevel
         )
     }
 }
