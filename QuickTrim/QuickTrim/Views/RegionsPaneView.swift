@@ -414,33 +414,39 @@ final class ModifierKeyMonitorView: NSView {
 
 // MARK: - Region Waveform Preview (for audio files)
 
+/// Mini snapshot of the region's actual audio, rendered from the shared
+/// peak cache (already decoded for the timeline, so this is just a redraw).
 struct RegionWaveformPreview: View {
+    @EnvironmentObject var appState: AppState
     let region: Region
 
+    @State private var waveformData: WaveformData?
+
     var body: some View {
-        Canvas { context, size in
-            let color: Color = region.isBinned ? .red : .green
+        GeometryReader { geometry in
+            ZStack {
+                Color.black.opacity(0.3)
 
-            // Draw a simple waveform representation
-            let midY = size.height / 2
-            let barCount = 15
-            let barWidth = size.width / CGFloat(barCount)
-
-            for i in 0..<barCount {
-                // Generate pseudo-random heights based on region timing for visual variety
-                let seed = (region.startTime + Double(i) * 0.1).truncatingRemainder(dividingBy: 1.0)
-                let height = CGFloat(0.3 + seed * 0.6) * midY
-
-                let rect = CGRect(
-                    x: CGFloat(i) * barWidth + 1,
-                    y: midY - height,
-                    width: barWidth - 2,
-                    height: height * 2
-                )
-                context.fill(Path(rect), with: .color(color.opacity(0.8)))
+                if let data = waveformData {
+                    WaveformCanvasView(
+                        data: data,
+                        segments: [
+                            WaveformSegment(
+                                timeStart: region.startTime,
+                                timeEnd: region.endTime,
+                                xStart: 0,
+                                xEnd: geometry.size.width,
+                                isBinned: region.isBinned
+                            )
+                        ]
+                    )
+                }
             }
         }
-        .background(Color.black.opacity(0.3))
+        .task(id: appState.videoURL) {
+            guard let url = appState.videoURL else { return }
+            waveformData = try? await WaveformCache.shared.waveform(for: url)
+        }
     }
 }
 

@@ -410,35 +410,40 @@ struct TimecodeRulerView: View {
     let width: CGFloat
     let zoom: Double
 
+    /// Candidate label intervals in seconds, from frame-ish detail up to hours,
+    /// so any duration/zoom combination finds a readable spacing.
+    private static let niceIntervals: [Double] = [
+        1, 2, 5, 10, 15, 30,
+        60, 120, 300, 600, 900, 1800,
+        3600, 7200, 14400
+    ]
+
     var body: some View {
         Canvas { context, size in
             guard duration > 0 else { return }
 
             let pixelsPerSecond = width / duration
 
-            let majorInterval: Double
-            let minorTicksPerMajor: Int
+            // Smallest interval whose labels stay comfortably apart.
+            let minLabelSpacing: CGFloat = 90
+            let majorInterval = Self.niceIntervals.first {
+                CGFloat($0) * pixelsPerSecond >= minLabelSpacing
+            } ?? Self.niceIntervals.last!
 
-            if pixelsPerSecond > 100 {
-                majorInterval = 1.0
-                minorTicksPerMajor = 4
-            } else if pixelsPerSecond > 20 {
-                majorInterval = 5.0
-                minorTicksPerMajor = 5
-            } else if pixelsPerSecond > 5 {
-                majorInterval = 15.0
-                minorTicksPerMajor = 3
-            } else {
-                majorInterval = 60.0
-                minorTicksPerMajor = 4
-            }
+            // Densest minor subdivision that keeps ticks at least ~10pt apart.
+            let minorTicksPerMajor = [5, 4, 3, 2, 1].first {
+                CGFloat(majorInterval / Double($0)) * pixelsPerSecond >= 10
+            } ?? 1
 
             let minorInterval = majorInterval / Double(minorTicksPerMajor)
 
-            var time: Double = 0
-            while time <= duration {
+            var tickIndex = 0
+            while true {
+                let time = Double(tickIndex) * minorInterval
+                if time > duration { break }
+
                 let x = (time / duration) * width
-                let isMajor = time.truncatingRemainder(dividingBy: majorInterval) < 0.001
+                let isMajor = tickIndex % minorTicksPerMajor == 0
 
                 let tickHeight: CGFloat = isMajor ? 10 : 5
                 let tickPath = Path { path in
@@ -457,7 +462,7 @@ struct TimecodeRulerView: View {
                     context.draw(text, at: CGPoint(x: x, y: 6), anchor: .top)
                 }
 
-                time += minorInterval
+                tickIndex += 1
             }
         }
         .background(Color(nsColor: .controlBackgroundColor))
