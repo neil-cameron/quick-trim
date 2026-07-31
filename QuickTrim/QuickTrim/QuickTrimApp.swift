@@ -26,7 +26,7 @@ struct QuickTrimApp: App {
                 .keyboardShortcut("n", modifiers: .command)
 
                 Button("Open...") {
-                    if let appState = getFocusedAppState() {
+                    if let appState = getFocusedAppState(), appState.videoURL == nil {
                         appState.showOpenPanel()
                     } else {
                         WindowManager.shared.openNewWindowWithOpenPanel()
@@ -190,6 +190,7 @@ class WindowManager {
     static let shared = WindowManager()
     var openWindowAction: (() -> Void)?
     var showOpenPanelOnNextWindow: Bool = false
+    var pendingURL: URL?
 
     func openNewWindow() {
         if let action = openWindowAction {
@@ -200,6 +201,24 @@ class WindowManager {
     func openNewWindowWithOpenPanel() {
         showOpenPanelOnNextWindow = true
         openNewWindow()
+    }
+
+    func openNewWindow(withURL url: URL) {
+        pendingURL = url
+        openNewWindow()
+    }
+
+    /// Finds an already-open window whose document is blank (no video loaded).
+    static func findBlankAppState() -> AppState? {
+        for window in NSApp.windows {
+            if let contentView = window.contentView,
+               let hostingView = DocumentHostingView.find(in: contentView),
+               let appState = hostingView.appState,
+               appState.videoURL == nil {
+                return appState
+            }
+        }
+        return nil
     }
 }
 
@@ -232,17 +251,18 @@ struct DocumentWindowView: View {
             .background(
                 DocumentHostingViewRepresentable(appState: appState)
             )
-            .onOpenURL { url in
-                appState.openVideo(url: url)
-            }
             .onAppear {
                 // Register the openWindow action for menu commands
                 WindowManager.shared.openWindowAction = { [openWindow] in
                     openWindow(id: "document")
                 }
 
-                // Check if we should show the open panel immediately
-                if WindowManager.shared.showOpenPanelOnNextWindow {
+                // If a file was waiting for the next window (Finder "Open" or
+                // Cmd+O from a window with content), load it into this one.
+                if let url = WindowManager.shared.pendingURL {
+                    WindowManager.shared.pendingURL = nil
+                    appState.openVideo(url: url)
+                } else if WindowManager.shared.showOpenPanelOnNextWindow {
                     WindowManager.shared.showOpenPanelOnNextWindow = false
                     DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
                         appState.showOpenPanel()
@@ -268,45 +288,41 @@ struct DocumentHostingViewRepresentable: NSViewRepresentable {
 
 class AppDelegate: NSObject, NSApplicationDelegate {
     func application(_ application: NSApplication, open urls: [URL]) {
-        // Open file in a new window or existing empty window
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-            if let url = urls.first {
-                // Find an empty window or create one
-                if let window = NSApp.keyWindow,
-                   let contentView = window.contentView,
-                   let hostingView = DocumentHostingView.find(in: contentView),
-                   let appState = hostingView.appState,
-                   appState.videoURL == nil {
-                    appState.openVideo(url: url)
-                } else {
-                    // Create a new window by opening the app
-                    self.openURLInNewWindow(url)
-                }
-            }
+        guard let url = urls.first else { return }
+
+        // Reuse a blank window if one is already open (or is the window
+        // SwiftUI is about to create for a cold launch); otherwise open
+        // a brand new window for it. Either way, no delay/race needed:
+        // a freshly-created window picks up the pending URL itself in
+        // DocumentWindowView.onAppear.
+        if let appState = WindowManager.findBlankAppState() {
+            appState.openVideo(url: url)
+            // On a cold launch with a file to open, SwiftUI can spin up more
+            // than one initial "document" window before this delegate call
+            // runs. Now that the file has a home, any window still blank
+            // is launch noise, not a window the user asked for.
+            closeOtherBlankWindows(keeping: appState)
+        } else {
+            WindowManager.shared.openNewWindow(withURL: url)
         }
     }
 
-    private func openURLInNewWindow(_ url: URL) {
-        // Store URL for new window
-        pendingURL = url
-
-        // Open new window using WindowManager
-        WindowManager.shared.openNewWindow()
-
-        // After window opens, load the URL
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
-            if let url = self.pendingURL,
-               let window = NSApp.keyWindow,
-               let contentView = window.contentView,
-               let hostingView = DocumentHostingView.find(in: contentView),
-               let appState = hostingView.appState {
-                appState.openVideo(url: url)
-                self.pendingURL = nil
-            }
+    private func closeOtherBlankWindows(keeping appState: AppState) {
+        for window in NSApp.windows {
+            guard let contentView = window.contentView,
+                  let hostingView = DocumentHostingView.find(in: contentView),
+                  let windowAppState = hostingView.appState,
+                  windowAppState !== appState,
+                  windowAppState.videoURL == nil else { continue }
+            window.close()
         }
     }
 
-    private var pendingURL: URL?
+    // Windows here are always transient (a blank drop target or a loaded
+    // video); there's nothing worth restoring across launches.
+    func applicationSupportsSecureRestorableState(_ app: NSApplication) -> Bool {
+        false
+    }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
         // Keep app running when window closes so user can open new files
