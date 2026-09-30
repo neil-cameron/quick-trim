@@ -167,6 +167,23 @@ struct ZoomSlider: View {
     }
 }
 
+// MARK: - Scroll Anchors
+
+/// Invisible views laid across the timeline so ScrollViewReader can scroll
+/// to a position. Spacing scales with zoom (~100pt apart) so centring on the
+/// playhead stays precise at 5000%.
+enum ScrollAnchors {
+    static func count(for contentWidth: CGFloat) -> Int {
+        max(100, min(2_000, Int(contentWidth / 100)))
+    }
+
+    /// Anchor index for a 0...1 position along the timeline.
+    static func index(for position: Double, contentWidth: CGFloat) -> Int {
+        let count = count(for: contentWidth)
+        return min(count - 1, max(0, Int(position * Double(count))))
+    }
+}
+
 // MARK: - Normal Timeline (full video)
 
 struct NormalTimelineContent: View {
@@ -243,9 +260,9 @@ struct NormalTimelineContent: View {
 
                         // Invisible anchor views for scrolling - on top but non-interactive
                         HStack(spacing: 0) {
-                            ForEach(0..<100, id: \.self) { index in
+                            ForEach(0..<ScrollAnchors.count(for: contentWidth), id: \.self) { index in
                                 Color.clear
-                                    .frame(width: contentWidth / 100)
+                                    .frame(width: contentWidth / CGFloat(ScrollAnchors.count(for: contentWidth)))
                                     .id("segment\(index)")
                             }
                         }
@@ -304,20 +321,29 @@ struct NormalTimelineContent: View {
                 }
                 .onChange(of: appState.currentTime) { _, newTime in
                     if appState.capturePlayheadEnabled && appState.duration > 0 {
-                        let position = newTime / appState.duration
-                        let segmentIndex = min(99, max(0, Int(position * 100)))
+                        let index = ScrollAnchors.index(for: newTime / appState.duration, contentWidth: contentWidth)
                         withAnimation(.linear(duration: 0.1)) {
-                            scrollProxy.scrollTo("segment\(segmentIndex)", anchor: .center)
+                            scrollProxy.scrollTo("segment\(index)", anchor: .center)
                         }
                     }
                 }
                 .onChange(of: appState.capturePlayheadEnabled) { _, newValue in
                     if newValue && appState.duration > 0 {
-                        let position = appState.currentTime / appState.duration
-                        let segmentIndex = min(99, max(0, Int(position * 100)))
+                        let index = ScrollAnchors.index(for: appState.currentTime / appState.duration, contentWidth: contentWidth)
                         withAnimation(.easeInOut(duration: 0.3)) {
-                            scrollProxy.scrollTo("segment\(segmentIndex)", anchor: .center)
+                            scrollProxy.scrollTo("segment\(index)", anchor: .center)
                         }
+                    }
+                }
+                .onChange(of: appState.timelineZoom) { _, newZoom in
+                    // Zooming grows the content under a fixed scroll offset,
+                    // which would land you somewhere unrelated — keep the
+                    // playhead in view instead.
+                    guard appState.duration > 0 else { return }
+                    let newWidth = max(geometry.size.width * newZoom, geometry.size.width)
+                    let index = ScrollAnchors.index(for: appState.currentTime / appState.duration, contentWidth: newWidth)
+                    DispatchQueue.main.async {
+                        scrollProxy.scrollTo("segment\(index)", anchor: .center)
                     }
                 }
             }
@@ -420,9 +446,9 @@ struct PreviewTimelineContent: View {
 
                         // Invisible anchor views for scrolling - on top but non-interactive
                         HStack(spacing: 0) {
-                            ForEach(0..<100, id: \.self) { index in
+                            ForEach(0..<ScrollAnchors.count(for: contentWidth), id: \.self) { index in
                                 Color.clear
-                                    .frame(width: contentWidth / 100)
+                                    .frame(width: contentWidth / CGFloat(ScrollAnchors.count(for: contentWidth)))
                                     .id("previewSegment\(index)")
                             }
                         }
@@ -453,21 +479,29 @@ struct PreviewTimelineContent: View {
                 .onChange(of: appState.currentTime) { _, _ in
                     if appState.capturePlayheadEnabled && previewDuration > 0 {
                         let previewTime = appState.convertToPreviewTime(appState.currentTime)
-                        let position = previewTime / previewDuration
-                        let segmentIndex = min(99, max(0, Int(position * 100)))
+                        let index = ScrollAnchors.index(for: previewTime / previewDuration, contentWidth: contentWidth)
                         withAnimation(.linear(duration: 0.1)) {
-                            scrollProxy.scrollTo("previewSegment\(segmentIndex)", anchor: .center)
+                            scrollProxy.scrollTo("previewSegment\(index)", anchor: .center)
                         }
                     }
                 }
                 .onChange(of: appState.capturePlayheadEnabled) { _, newValue in
                     if newValue && previewDuration > 0 {
                         let previewTime = appState.convertToPreviewTime(appState.currentTime)
-                        let position = previewTime / previewDuration
-                        let segmentIndex = min(99, max(0, Int(position * 100)))
+                        let index = ScrollAnchors.index(for: previewTime / previewDuration, contentWidth: contentWidth)
                         withAnimation(.easeInOut(duration: 0.3)) {
-                            scrollProxy.scrollTo("previewSegment\(segmentIndex)", anchor: .center)
+                            scrollProxy.scrollTo("previewSegment\(index)", anchor: .center)
                         }
+                    }
+                }
+                .onChange(of: appState.timelineZoom) { _, newZoom in
+                    // Keep the playhead in view when zooming (see normal timeline)
+                    guard previewDuration > 0 else { return }
+                    let newWidth = max(geometry.size.width * newZoom, geometry.size.width)
+                    let previewTime = appState.convertToPreviewTime(appState.currentTime)
+                    let index = ScrollAnchors.index(for: previewTime / previewDuration, contentWidth: newWidth)
+                    DispatchQueue.main.async {
+                        scrollProxy.scrollTo("previewSegment\(index)", anchor: .center)
                     }
                 }
             }

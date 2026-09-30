@@ -18,7 +18,7 @@ enum VideoWaveformLayout {
 /// A horizontal span of waveform to draw: a source-time range mapped onto an
 /// x range, with its display state. Preview mode concatenates several
 /// segments; binned regions and played/unplayed splits also become segments.
-struct WaveformSegment {
+struct WaveformSegment: Equatable {
     let timeStart: Double
     let timeEnd: Double
     let xStart: CGFloat
@@ -95,10 +95,32 @@ enum WaveformFill {
 }
 
 /// Canvas that renders WaveformData as a Logic-style continuous shape.
+///
+/// Views that host this usually observe AppState, so their bodies re-run on
+/// every playback tick (20x/s). The drawing lives in an Equatable inner view
+/// so SwiftUI skips the Canvas redraw — a full pass over the peak cache, up
+/// to ~90k columns at max zoom — unless the waveform's inputs changed.
 struct WaveformCanvasView: View {
     let data: WaveformData
     let segments: [WaveformSegment]
     var targetFill: Float = WaveformFill.timeline
+
+    var body: some View {
+        WaveformCanvasContent(data: data, segments: segments, targetFill: targetFill)
+            .equatable()
+    }
+}
+
+private struct WaveformCanvasContent: View, Equatable {
+    let data: WaveformData
+    let segments: [WaveformSegment]
+    let targetFill: Float
+
+    static func == (lhs: Self, rhs: Self) -> Bool {
+        lhs.data.id == rhs.data.id
+            && lhs.targetFill == rhs.targetFill
+            && lhs.segments == rhs.segments
+    }
 
     var body: some View {
         // No .drawingGroup() here: it rasterizes the whole canvas into one
