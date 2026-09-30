@@ -303,8 +303,10 @@ class AppState: ObservableObject {
 
         let region = regions[regionIndex]
 
-        // Don't split if we're at the start or end of the region
-        if abs(currentTime - region.startTime) < Self.timeTolerance || abs(currentTime - region.endTime) < Self.timeTolerance {
+        // Don't split within a frame of the region's edges — otherwise two
+        // marks at (nearly) the same spot create a zero-length region.
+        let minGap = max(Self.timeTolerance, 1.0 / frameRate)
+        if abs(currentTime - region.startTime) < minGap || abs(currentTime - region.endTime) < minGap {
             return
         }
 
@@ -603,8 +605,11 @@ class AppState: ObservableObject {
 
     // MARK: - Timeline Zoom
 
+    /// Maximum timeline zoom (5000%).
+    static let maxTimelineZoom: Double = 50.0
+
     func zoomIn() {
-        timelineZoom = min(timelineZoom * 1.5, 10.0)
+        timelineZoom = min(timelineZoom * 1.5, Self.maxTimelineZoom)
     }
 
     func zoomOut() {

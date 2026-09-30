@@ -77,7 +77,8 @@ struct TimelineView: View {
 
                     Text("\(Int(appState.timelineZoom * 100))%")
                         .font(.caption)
-                        .frame(width: 40)
+                        .monospacedDigit()
+                        .frame(width: 48)
                         .contentShape(Rectangle())
                         .onTapGesture(count: 2) {
                             appState.timelineZoom = 1.0
@@ -139,8 +140,17 @@ struct TimelineView: View {
 struct ZoomSlider: View {
     @Binding var zoom: Double
 
+    /// Logarithmic mapping: 1x...50x spread evenly, so 100–1000% isn't
+    /// crammed into the first fifth of the track.
+    private var logZoom: Binding<Double> {
+        Binding(
+            get: { log(max(zoom, 1)) / log(AppState.maxTimelineZoom) },
+            set: { zoom = pow(AppState.maxTimelineZoom, $0) }
+        )
+    }
+
     var body: some View {
-        Slider(value: $zoom, in: 1.0...10.0)
+        Slider(value: logZoom, in: 0...1)
             .gesture(
                 TapGesture(count: 2)
                     .onEnded {
@@ -163,6 +173,12 @@ struct NormalTimelineContent: View {
     @EnvironmentObject var appState: AppState
     let timecodeHeight: CGFloat
     let playheadWidth: CGFloat
+
+    @State private var hoverX: CGFloat?
+    @State private var isOptionPressed = false
+
+    /// How close (in points) the pointer must be to a marker to target it.
+    private let markerHitRadius: CGFloat = 10
 
     var body: some View {
         GeometryReader { geometry in
@@ -234,6 +250,30 @@ struct NormalTimelineContent: View {
                             }
                         }
                         .allowsHitTesting(false)
+
+                        // Option-hover near a marker: highlight it and offer delete
+                        if let markerIndex = hoveredMarkerIndex(contentWidth: contentWidth) {
+                            let x = markerX(markerIndex, contentWidth: contentWidth)
+
+                            Rectangle()
+                                .fill(Color.red)
+                                .frame(width: 2, height: geometry.size.height)
+                                .position(x: x, y: geometry.size.height / 2)
+                                .allowsHitTesting(false)
+
+                            Button {
+                                deleteMarker(markerIndex)
+                            } label: {
+                                Image(systemName: "xmark.circle.fill")
+                                    .font(.system(size: 18))
+                                    .symbolRenderingMode(.palette)
+                                    .foregroundStyle(.white, .red)
+                                    .shadow(radius: 1)
+                            }
+                            .buttonStyle(.plain)
+                            .help("Delete marker")
+                            .position(x: x, y: timecodeHeight + 14)
+                        }
                     }
                     .frame(width: contentWidth, height: geometry.size.height)
                     .contentShape(Rectangle())
@@ -245,15 +285,22 @@ struct NormalTimelineContent: View {
                             }
                     )
                     .onContinuousHover { phase in
-                        guard appState.skimmingEnabled else { return }
                         switch phase {
                         case .active(let location):
+                            hoverX = location.x
+                            // Option = marker-editing mode: don't move the playhead
+                            guard appState.skimmingEnabled, !isOptionPressed else { return }
                             let time = timeFromPosition(location.x, width: contentWidth)
                             appState.skimTo(time: time)
                         case .ended:
+                            hoverX = nil
                             appState.stopSkimming()
                         }
                     }
+                }
+                .background(ModifierKeyMonitor(isOptionPressed: $isOptionPressed))
+                .onChange(of: isOptionPressed) { _, pressed in
+                    if pressed { appState.stopSkimming() }
                 }
                 .onChange(of: appState.currentTime) { _, newTime in
                     if appState.capturePlayheadEnabled && appState.duration > 0 {
@@ -280,6 +327,36 @@ struct NormalTimelineContent: View {
     private func timeFromPosition(_ x: CGFloat, width: CGFloat) -> Double {
         let proportion = x / width
         return max(0, min(proportion * appState.duration, appState.duration))
+    }
+
+    // MARK: Marker deletion (Option + hover)
+
+    /// Marker i sits between regions[i] and regions[i + 1].
+    private func markerX(_ index: Int, contentWidth: CGFloat) -> CGFloat {
+        CGFloat(appState.regions[index].endTime / appState.duration) * contentWidth
+    }
+
+    /// The marker nearest the pointer, if Option is held and it's within reach.
+    private func hoveredMarkerIndex(contentWidth: CGFloat) -> Int? {
+        guard isOptionPressed,
+              let hoverX,
+              appState.duration > 0,
+              appState.regions.count > 1 else { return nil }
+
+        let nearest = (0..<(appState.regions.count - 1)).min {
+            abs(markerX($0, contentWidth: contentWidth) - hoverX)
+                < abs(markerX($1, contentWidth: contentWidth) - hoverX)
+        }
+        guard let nearest,
+              abs(markerX(nearest, contentWidth: contentWidth) - hoverX) <= markerHitRadius
+        else { return nil }
+        return nearest
+    }
+
+    private func deleteMarker(_ index: Int) {
+        guard index + 1 < appState.regions.count else { return }
+        // Removing region i+1's start marker merges it with region i
+        appState.removeStartMarker(for: appState.regions[index + 1])
     }
 }
 
@@ -413,6 +490,7 @@ struct TimecodeRulerView: View {
     /// Candidate label intervals in seconds, from frame-ish detail up to hours,
     /// so any duration/zoom combination finds a readable spacing.
     private static let niceIntervals: [Double] = [
+        0.1, 0.2, 0.5,
         1, 2, 5, 10, 15, 30,
         60, 120, 300, 600, 900, 1800,
         3600, 7200, 14400
@@ -454,7 +532,7 @@ struct TimecodeRulerView: View {
                 context.stroke(tickPath, with: .color(.secondary.opacity(0.5)), lineWidth: 1)
 
                 if isMajor {
-                    let label = formatTimeLabel(time)
+                    let label = formatTimeLabel(time, showTenths: majorInterval < 1)
                     let text = Text(label)
                         .font(.system(size: 9, design: .monospaced))
                         .foregroundColor(.secondary)
@@ -468,16 +546,19 @@ struct TimecodeRulerView: View {
         .background(Color(nsColor: .controlBackgroundColor))
     }
 
-    private func formatTimeLabel(_ time: Double) -> String {
-        let minutes = Int(time) / 60
-        let seconds = Int(time) % 60
+    private func formatTimeLabel(_ time: Double, showTenths: Bool) -> String {
+        // Round to tenths first so e.g. 59.96s can't render as "0:60.0".
+        let totalTenths = Int((time * 10).rounded())
+        let totalSeconds = totalTenths / 10
+        let tenths = totalTenths % 10
+        let hours = totalSeconds / 3600
+        let minutes = (totalSeconds % 3600) / 60
+        let seconds = totalSeconds % 60
 
-        if time >= 3600 {
-            let hours = Int(time) / 3600
-            return String(format: "%d:%02d:%02d", hours, minutes % 60, seconds)
-        } else {
-            return String(format: "%d:%02d", minutes, seconds)
-        }
+        let base = hours > 0
+            ? String(format: "%d:%02d:%02d", hours, minutes, seconds)
+            : String(format: "%d:%02d", minutes, seconds)
+        return showTenths ? "\(base).\(tenths)" : base
     }
 }
 
@@ -631,34 +712,48 @@ struct StrikethroughPattern: View {
     }
 }
 
+// MARK: - Thumbnail Layout
+
+enum ThumbnailLayout {
+    /// Preferred on-screen width of one filmstrip frame.
+    static let targetWidth: CGFloat = 80
+    /// Upper bound on frames per strip: deep zoom (up to 50x) would otherwise
+    /// ask for 1,000+ frames per zoom step. Beyond this, tiles widen instead.
+    static let maxCount = 300
+
+    static func count(for width: CGFloat) -> Int {
+        min(Int(ceil(width / targetWidth)), maxCount)
+    }
+}
+
 // MARK: - Thumbnail Strip (Normal mode)
 
 struct ThumbnailStripView: View {
     @EnvironmentObject var appState: AppState
     @State private var thumbnails: [(time: Double, image: NSImage)] = []
     @State private var lastGeneratedURL: URL?
-    @State private var lastGeneratedWidth: CGFloat = 0
+    @State private var lastGeneratedCount = 0
     @State private var lastGeneratedDuration: Double = 0
     @State private var generationTask: Task<Void, Never>?
 
     let width: CGFloat
     let height: CGFloat
 
-    private let thumbnailWidth: CGFloat = 80
+    private let thumbnailWidth = ThumbnailLayout.targetWidth
 
     var body: some View {
+        let tileWidth = width / CGFloat(max(1, thumbnails.count))
         HStack(spacing: 0) {
             ForEach(thumbnails, id: \.time) { thumbnail in
                 Image(nsImage: thumbnail.image)
                     .resizable()
                     .aspectRatio(contentMode: .fill)
-                    .frame(width: thumbnailWidth, height: height)
+                    .frame(width: tileWidth, height: height)
                     .clipped()
             }
         }
-        // The tile count is rounded up, so the strip can naturally overflow
-        // the requested width; clamp it so it never widens its container
-        // (which would shift region overlays out of alignment).
+        // Tiles divide the width exactly; the clamp is a safety net so the
+        // strip can never widen its container and misalign region overlays.
         .frame(width: width, height: height, alignment: .leading)
         .clipped()
         .onAppear {
@@ -688,16 +783,16 @@ struct ThumbnailStripView: View {
             return
         }
 
-        let widthChanged = abs(width - lastGeneratedWidth) > 20
+        let countChanged = ThumbnailLayout.count(for: width) != lastGeneratedCount
         let urlChanged = url != lastGeneratedURL
         let durationChanged = lastGeneratedDuration == 0 && appState.duration > 0
         let needsData = thumbnails.isEmpty
 
-        guard urlChanged || widthChanged || durationChanged || needsData else { return }
+        guard urlChanged || countChanged || durationChanged || needsData else { return }
 
         lastGeneratedURL = url
         lastGeneratedDuration = appState.duration
-        // Don't update lastGeneratedWidth yet — only on successful completion
+        // Don't update lastGeneratedCount yet — only on successful completion
         let capturedWidth = width
 
         generateThumbnails(url: url, capturedWidth: capturedWidth)
@@ -711,7 +806,7 @@ struct ThumbnailStripView: View {
         imageGenerator.appliesPreferredTrackTransform = true
         imageGenerator.maximumSize = CGSize(width: thumbnailWidth * 2, height: height * 2)
 
-        let numberOfThumbnails = Int(ceil(capturedWidth / thumbnailWidth))
+        let numberOfThumbnails = ThumbnailLayout.count(for: capturedWidth)
         guard numberOfThumbnails > 0 && appState.duration > 0 else { return }
 
         let interval = appState.duration / Double(numberOfThumbnails)
@@ -738,7 +833,7 @@ struct ThumbnailStripView: View {
             if !Task.isCancelled {
                 await MainActor.run {
                     self.thumbnails = newThumbnails
-                    self.lastGeneratedWidth = capturedWidth
+                    self.lastGeneratedCount = numberOfThumbnails
                 }
             }
         }
@@ -751,7 +846,7 @@ struct PreviewThumbnailStripView: View {
     @EnvironmentObject var appState: AppState
     @State private var thumbnails: [(time: Double, image: NSImage)] = []
     @State private var lastKeptRegionIds: [UUID] = []
-    @State private var lastGeneratedWidth: CGFloat = 0
+    @State private var lastGeneratedCount = 0
     @State private var generationTask: Task<Void, Never>?
 
     let keptRegions: [Region]
@@ -759,20 +854,20 @@ struct PreviewThumbnailStripView: View {
     let width: CGFloat
     let height: CGFloat
 
-    private let thumbnailWidth: CGFloat = 80
+    private let thumbnailWidth = ThumbnailLayout.targetWidth
 
     var body: some View {
+        let tileWidth = width / CGFloat(max(1, thumbnails.count))
         HStack(spacing: 0) {
             ForEach(thumbnails, id: \.time) { thumbnail in
                 Image(nsImage: thumbnail.image)
                     .resizable()
                     .aspectRatio(contentMode: .fill)
-                    .frame(width: thumbnailWidth, height: height)
+                    .frame(width: tileWidth, height: height)
                     .clipped()
             }
         }
-        // Same width clamp as ThumbnailStripView — the rounded-up tile count
-        // must not widen the container.
+        // Same width clamp as ThumbnailStripView.
         .frame(width: width, height: height, alignment: .leading)
         .clipped()
         .onAppear {
@@ -794,13 +889,13 @@ struct PreviewThumbnailStripView: View {
 
         let currentIds = keptRegions.map { $0.id }
         let idsChanged = currentIds != lastKeptRegionIds
-        let widthChanged = abs(width - lastGeneratedWidth) > 20
+        let countChanged = ThumbnailLayout.count(for: width) != lastGeneratedCount
         let needsData = thumbnails.isEmpty
 
-        guard idsChanged || widthChanged || needsData else { return }
+        guard idsChanged || countChanged || needsData else { return }
 
         lastKeptRegionIds = currentIds
-        // Don't update lastGeneratedWidth yet — only on successful completion
+        // Don't update lastGeneratedCount yet — only on successful completion
         let capturedWidth = width
 
         generateThumbnails(url: url, capturedWidth: capturedWidth)
@@ -819,7 +914,7 @@ struct PreviewThumbnailStripView: View {
         imageGenerator.appliesPreferredTrackTransform = true
         imageGenerator.maximumSize = CGSize(width: thumbnailWidth * 2, height: height * 2)
 
-        let numberOfThumbnails = Int(ceil(capturedWidth / thumbnailWidth))
+        let numberOfThumbnails = ThumbnailLayout.count(for: capturedWidth)
         guard numberOfThumbnails > 0 else { return }
 
         let interval = previewDuration / Double(numberOfThumbnails)
@@ -848,7 +943,7 @@ struct PreviewThumbnailStripView: View {
             if !Task.isCancelled {
                 await MainActor.run {
                     self.thumbnails = newThumbnails
-                    self.lastGeneratedWidth = capturedWidth
+                    self.lastGeneratedCount = numberOfThumbnails
                 }
             }
         }
