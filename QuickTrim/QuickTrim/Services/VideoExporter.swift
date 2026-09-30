@@ -14,6 +14,7 @@ enum ExportError: LocalizedError {
     case exportFailed(String)
     case assetLoadFailed
     case compositionFailed
+    case outputIsSource
 
     var errorDescription: String? {
         switch self {
@@ -27,6 +28,8 @@ enum ExportError: LocalizedError {
             return "Failed to load video asset"
         case .compositionFailed:
             return "Failed to create video composition"
+        case .outputIsSource:
+            return "QuickTrim can't overwrite the file it's trimming. Choose a different name or location."
         }
     }
 }
@@ -60,6 +63,14 @@ class VideoExporter {
 
         // Sort regions by start time
         let sortedRegions = regions.sorted { $0.startTime < $1.startTime }
+
+        // The output is deleted before exporting (the user confirmed Replace in
+        // the save panel) — if that's the source itself, we'd destroy the
+        // original before reading it.
+        if outputURL.standardizedFileURL.resolvingSymlinksInPath()
+            == sourceURL.standardizedFileURL.resolvingSymlinksInPath() {
+            throw ExportError.outputIsSource
+        }
 
         // Remove existing file if it exists (user chose to overwrite via save panel)
         try? FileManager.default.removeItem(at: outputURL)
@@ -174,8 +185,9 @@ class VideoExporter {
         // Build video composition for crop if needed
         var videoComposition: AVVideoComposition? = nil
         if options.hasCrop, let videoTrack = compositionVideoTrack {
-            let croppedWidth = max(2, Int(options.videoSize.width) - options.cropLeft - options.cropRight)
-            let croppedHeight = max(2, Int(options.videoSize.height) - options.cropTop - options.cropBottom)
+            // Round down to even: H.264/HEVC encoders require even dimensions
+            let croppedWidth = max(2, (Int(options.videoSize.width) - options.cropLeft - options.cropRight) & ~1)
+            let croppedHeight = max(2, (Int(options.videoSize.height) - options.cropTop - options.cropBottom) & ~1)
 
             let cropTranslation = CGAffineTransform(
                 translationX: -CGFloat(options.cropLeft),
@@ -207,36 +219,11 @@ class VideoExporter {
             videoComposition = mutableVC
         }
 
-        // Determine output file type based on source and media type
-        let sourceExtension = sourceAsset.url.pathExtension.lowercased()
-        let outputFileType: AVFileType
-
-        if isAudioOnly {
-            // Audio-only output types
-            switch sourceExtension {
-            case "mp3":
-                // MP3 can't be written directly, use M4A
-                outputFileType = .m4a
-            case "aiff", "aif":
-                outputFileType = .aiff
-            case "wav", "wave":
-                outputFileType = .wav
-            case "m4a":
-                outputFileType = .m4a
-            default:
-                outputFileType = .m4a  // Default audio format
-            }
-        } else {
-            // Video output types
-            switch sourceExtension {
-            case "mov":
-                outputFileType = .mov
-            case "m4v":
-                outputFileType = .m4v
-            default:
-                outputFileType = .mp4
-            }
-        }
+        let outputFileType = Self.outputFileType(
+            outputExtension: outputURL.pathExtension.lowercased(),
+            sourceExtension: sourceAsset.url.pathExtension.lowercased(),
+            isAudioOnly: isAudioOnly
+        )
 
         // If transcoding or crop requested, skip passthrough and re-encode directly
         if options.transcodeOutput || options.hasCrop {
@@ -301,6 +288,41 @@ class VideoExporter {
                 outputFileType: outputFileType,
                 progressHandler: progressHandler
             )
+        }
+    }
+
+    /// Container for the export. The extension the user chose in the save
+    /// panel wins (so "clip.mp4" really is an MP4); the source's type is the
+    /// fallback for unrecognised extensions.
+    static func outputFileType(
+        outputExtension: String,
+        sourceExtension: String,
+        isAudioOnly: Bool
+    ) -> AVFileType {
+        if isAudioOnly {
+            switch outputExtension {
+            case "m4a": return .m4a
+            case "wav", "wave": return .wav
+            case "aif", "aiff": return .aiff
+            default: break
+            }
+            switch sourceExtension {
+            case "aiff", "aif": return .aiff
+            case "wav", "wave": return .wav
+            default: return .m4a  // incl. MP3, which AVFoundation can't write
+            }
+        } else {
+            switch outputExtension {
+            case "mov": return .mov
+            case "m4v": return .m4v
+            case "mp4": return .mp4
+            default: break
+            }
+            switch sourceExtension {
+            case "mov": return .mov
+            case "m4v": return .m4v
+            default: return .mp4
+            }
         }
     }
 

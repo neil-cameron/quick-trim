@@ -80,7 +80,6 @@ class AppState: ObservableObject {
     }
 
     // UI state
-    @Published var showCloseConfirmation: Bool = false
     @Published var isExporting: Bool = false
     @Published var exportProgress: Double = 0
 
@@ -117,13 +116,13 @@ class AppState: ObservableObject {
     private var undoStack: [RegionState] = []
     private var redoStack: [RegionState] = []
 
-    var canUndo: Bool { !undoStack.isEmpty }
-    var canRedo: Bool { !redoStack.isEmpty }
-    var hasUnsavedChanges: Bool { !undoStack.isEmpty && videoURL != nil }
+    /// Regions as of the last successful export (nil if never exported).
+    private var exportedRegions: [Region]?
 
-    /// True if user has created trim regions (more than the initial single region)
+    /// True if the user has created trim regions (more than the initial
+    /// single region) that haven't been exported as they currently stand.
     var hasUserCreatedRegions: Bool {
-        videoURL != nil && regions.count > 1
+        videoURL != nil && regions.count > 1 && regions != exportedRegions
     }
 
     var canExport: Bool {
@@ -177,11 +176,16 @@ class AppState: ObservableObject {
         Task { @MainActor in
             do {
                 let durationValue = try await asset.load(.duration)
-                self.duration = CMTimeGetSeconds(durationValue)
 
                 // Check for video and audio tracks
                 let videoTracks = try await asset.loadTracks(withMediaType: .video)
                 let audioTracks = try await asset.loadTracks(withMediaType: .audio)
+
+                // If another file was opened while this one loaded, drop
+                // these results rather than overwrite the newer file's state.
+                guard self.videoURL == url else { return }
+
+                self.duration = CMTimeGetSeconds(durationValue)
 
                 self.hasAudioTrack = audioTracks.first != nil
 
@@ -191,11 +195,13 @@ class AppState: ObservableObject {
                     // Some variable-frame-rate files report 0; fall back so
                     // frame stepping (1/frameRate) never divides by zero.
                     let nominalFrameRate = try await videoTrack.load(.nominalFrameRate)
-                    self.frameRate = nominalFrameRate > 0 ? Double(nominalFrameRate) : 30.0
 
                     // Load native video size (accounting for rotation)
                     let naturalSize = try await videoTrack.load(.naturalSize)
                     let preferredTransform = try await videoTrack.load(.preferredTransform)
+                    guard self.videoURL == url else { return }
+
+                    self.frameRate = nominalFrameRate > 0 ? Double(nominalFrameRate) : 30.0
                     let transformedSize = naturalSize.applying(preferredTransform)
                     self.videoNativeSize = CGSize(width: abs(transformedSize.width), height: abs(transformedSize.height))
                 } else if audioTracks.first != nil {
@@ -217,6 +223,7 @@ class AppState: ObservableObject {
                 self.redoStack = []
 
             } catch {
+                guard self.videoURL == url else { return }
                 self.presentOpenFailure(for: url, reason: error.localizedDescription)
             }
         }
@@ -284,7 +291,17 @@ class AppState: ObservableObject {
         regions = []
         undoStack = []
         redoStack = []
+        exportedRegions = nil
         cancellables.removeAll()
+
+        // Transient playback state from the previous file (e.g. a pending
+        // Home target) must not leak into the next one.
+        isPlaying = false
+        skimStopTask?.cancel()
+        skimStopTask = nil
+        isSkimming = false
+        pendingSeekTime = nil
+        safePlaybackStartTime = nil
     }
 
     // MARK: - Region Management
@@ -644,14 +661,25 @@ class AppState: ObservableObject {
         // Show save panel to get write permission
         let savePanel = NSSavePanel()
 
-        // Set allowed types based on media type
-        // Note: AVFoundation cannot write MP3 files, so we don't offer it as an export option
+        let sourceExt = sourceURL.pathExtension.lowercased()
+
+        // Only offer containers the export path can actually produce: WAV and
+        // AIFF can be kept as-is or encoded to M4A, but compressed sources
+        // (MP3, AAC…) can only become M4A — AVFoundation has no MP3 writer
+        // and no preset that decodes to WAV/AIFF.
         if isAudioOnly {
-            savePanel.allowedContentTypes = [.mpeg4Audio, .aiff, .wav]
+            switch sourceExt {
+            case "wav", "wave":
+                savePanel.allowedContentTypes = [.wav, .mpeg4Audio]
+            case "aif", "aiff":
+                savePanel.allowedContentTypes = [.aiff, .mpeg4Audio]
+            default:
+                savePanel.allowedContentTypes = [.mpeg4Audio]
+            }
             savePanel.title = "Export Trimmed Audio"
             savePanel.message = "Choose where to save the exported audio"
         } else {
-            savePanel.allowedContentTypes = [.movie, .mpeg4Movie, .quickTimeMovie]
+            savePanel.allowedContentTypes = [.quickTimeMovie, .mpeg4Movie, UTType(filenameExtension: "m4v") ?? .mpeg4Movie]
             savePanel.title = "Export Trimmed Video"
             savePanel.message = "Choose where to save the exported video"
         }
@@ -662,14 +690,16 @@ class AppState: ObservableObject {
 
         // Generate default filename
         let originalFilename = sourceURL.deletingPathExtension().lastPathComponent
-        let sourceExt = sourceURL.pathExtension.lowercased()
 
-        // Use appropriate output extension (MP3 sources export to M4A since AVFoundation can't write MP3)
+        // Default to the same container the exporter will write
         let outputExt: String
-        if isAudioOnly {
-            outputExt = (sourceExt == "mp3") ? "m4a" : sourceExt
-        } else {
-            outputExt = sourceExt
+        switch VideoExporter.outputFileType(outputExtension: "", sourceExtension: sourceExt, isAudioOnly: isAudioOnly) {
+        case .mov: outputExt = "mov"
+        case .m4v: outputExt = "m4v"
+        case .wav: outputExt = "wav"
+        case .aiff: outputExt = "aiff"
+        case .m4a: outputExt = "m4a"
+        default: outputExt = "mp4"
         }
         savePanel.nameFieldStringValue = "\(originalFilename)_export.\(outputExt)"
 
@@ -682,6 +712,7 @@ class AppState: ObservableObject {
 
         isExporting = true
         exportProgress = 0
+        let regionsAtExport = regions
 
         let options = ExportOptions(
             removeAudio: exportRemoveAudio,
@@ -720,13 +751,14 @@ class AppState: ObservableObject {
                     alert.addButton(withTitle: "OK")
                     alert.addButton(withTitle: "Show in Finder")
 
+                    // Remember what was exported so quitting doesn't warn about
+                    // "unsaved" regions that are already in the exported file.
+                    // (Undo history is kept — you may want to tweak and re-export.)
+                    self.exportedRegions = regionsAtExport
+
                     if alert.runModal() == .alertSecondButtonReturn {
                         NSWorkspace.shared.selectFile(resultURL.path, inFileViewerRootedAtPath: "")
                     }
-
-                    // Clear undo stack after successful export
-                    self.undoStack.removeAll()
-                    self.redoStack.removeAll()
                 }
             } catch {
                 await MainActor.run {
@@ -742,21 +774,6 @@ class AppState: ObservableObject {
         }
     }
 
-    func confirmClose() {
-        let alert = NSAlert()
-        alert.messageText = "Unsaved Changes"
-        alert.informativeText = "You have unsaved trim regions. Are you sure you want to close?"
-        alert.alertStyle = .warning
-        alert.addButton(withTitle: "Close Without Saving")
-        alert.addButton(withTitle: "Cancel")
-
-        if alert.runModal() == .alertFirstButtonReturn {
-            NSApplication.shared.reply(toApplicationShouldTerminate: true)
-        } else {
-            NSApplication.shared.reply(toApplicationShouldTerminate: false)
-            showCloseConfirmation = false
-        }
-    }
 }
 
 struct RegionState {

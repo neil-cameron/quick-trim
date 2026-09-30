@@ -55,9 +55,13 @@ struct VideoPlayerView: View {
                 .disabled(appState.player == nil)
 
                 // Current time display
+                // Min width keeps short files steady; fixedSize lets
+                // hour-long timecodes (HH:MM:SS:FF) grow instead of wrapping.
                 Text(formatTime(appState.currentTime))
                     .font(.system(.body, design: .monospaced))
-                    .frame(width: 80, alignment: .leading)
+                    .lineLimit(1)
+                    .fixedSize()
+                    .frame(minWidth: 80, alignment: .leading)
 
                 Text("/")
                     .foregroundColor(.secondary)
@@ -65,7 +69,9 @@ struct VideoPlayerView: View {
                 Text(formatTime(appState.duration))
                     .font(.system(.body, design: .monospaced))
                     .foregroundColor(.secondary)
-                    .frame(width: 80, alignment: .leading)
+                    .lineLimit(1)
+                    .fixedSize()
+                    .frame(minWidth: 80, alignment: .leading)
 
                 Spacer()
 

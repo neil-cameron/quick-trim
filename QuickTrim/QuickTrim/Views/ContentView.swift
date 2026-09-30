@@ -33,13 +33,6 @@ struct ContentView: View {
                 ExportProgressOverlay(progress: appState.exportProgress)
             }
 
-            if appState.showCloseConfirmation {
-                Color.black.opacity(0.5)
-                    .ignoresSafeArea()
-                    .onAppear {
-                        appState.confirmClose()
-                    }
-            }
         }
         .background(KeyEventHandler())
     }
@@ -100,7 +93,10 @@ struct DropZoneView: View {
                 .foregroundColor(isTargeted ? .accentColor : .secondary.opacity(0.5))
                 .padding(40)
         )
-        .onDrop(of: [.movie, .video, .audio], isTargeted: $isTargeted) { providers in
+        // Accept any file URL (Finder's drag providers don't reliably
+        // advertise the media type); openVideo rejects non-media files
+        // with an alert.
+        .onDrop(of: [.fileURL], isTargeted: $isTargeted) { providers in
             guard let provider = providers.first else { return false }
 
             _ = provider.loadObject(ofClass: URL.self) { url, error in
