@@ -17,17 +17,21 @@ import AVFoundation
 /// any width/zoom aggregates or interpolates these buckets — the audio file
 /// is only ever decoded once.
 struct WaveformData {
+    /// Identity for cheap change detection (comparing the sample arrays
+    /// would cost as much as the redraw it's meant to avoid).
+    let id = UUID()
     let minSamples: [Float]   // per-bucket minimum, -1.0...0.0
     let maxSamples: [Float]   // per-bucket maximum, 0.0...1.0
     let rmsSamples: [Float]   // per-bucket RMS, 0.0...1.0
     let duration: Double
     let peakLevel: Float      // loudest |sample| in the whole file, 0.0...1.0
+    /// Exact bucket rate from the decoded stream (bucket i starts at
+    /// i / bucketsPerSecond seconds). Stored rather than derived from
+    /// bucketCount/duration, which drifts when the container's duration
+    /// and the decoded sample count disagree slightly.
+    let bucketsPerSecond: Double
 
     var bucketCount: Int { maxSamples.count }
-
-    var bucketsPerSecond: Double {
-        duration > 0 ? Double(bucketCount) / duration : 0
-    }
 
     /// Gain that scales the file's loudest peak up to `targetFill` of the
     /// available half-height (peak normalization, like Logic). Never shrinks
@@ -38,7 +42,7 @@ struct WaveformData {
         return CGFloat(min(max(targetFill / peakLevel, 1), maxBoost))
     }
 
-    static let empty = WaveformData(minSamples: [], maxSamples: [], rmsSamples: [], duration: 0, peakLevel: 0)
+    static let empty = WaveformData(minSamples: [], maxSamples: [], rmsSamples: [], duration: 0, peakLevel: 0, bucketsPerSecond: 0)
 
     /// Silent waveform of a given duration (fallback when decoding fails).
     static func silence(duration: Double) -> WaveformData {
@@ -48,7 +52,8 @@ struct WaveformData {
             maxSamples: Array(repeating: 0, count: count),
             rmsSamples: Array(repeating: 0, count: count),
             duration: duration,
-            peakLevel: 0
+            peakLevel: 0,
+            bucketsPerSecond: duration > 0 ? Double(count) / duration : 0
         )
     }
 }
@@ -148,30 +153,41 @@ enum WaveformGenerator {
         var sampleRate: Double = 0
         var channelCount = 1
 
-        let totalBuckets = bucketCount(for: duration)
+        let targetBucketsPerSecond = Double(bucketCount(for: duration)) / duration
+        let estimatedBuckets = bucketCount(for: duration) + 16
 
-        var minSamples = [Float](repeating: 0, count: totalBuckets)
-        var maxSamples = [Float](repeating: 0, count: totalBuckets)
-        var rmsSamples = [Float](repeating: 0, count: totalBuckets)
+        var minSamples: [Float] = []
+        var maxSamples: [Float] = []
+        var rmsSamples: [Float] = []
+        minSamples.reserveCapacity(estimatedBuckets)
+        maxSamples.reserveCapacity(estimatedBuckets)
+        rmsSamples.reserveCapacity(estimatedBuckets)
 
-        var framesPerBucket = 0
-        var bucketIndex = 0
+        // Fractional frames per bucket (e.g. 220.5 at 44.1kHz). Bucket
+        // boundaries are placed at exact multiples of this, so bucket i
+        // always starts at i / bucketsPerSecond seconds — rounding it to an
+        // integer made the waveform drift ~7s per hour on 44.1kHz audio.
+        var framesPerBucket: Double = 0
+        var frameIndex = 0
+        var nextBoundary: Double = 0
         var bucketMin: Float = 0
         var bucketMax: Float = 0
         var bucketSumSquares: Double = 0
         var framesInBucket = 0
 
         func flushBucket() {
-            guard bucketIndex < totalBuckets, framesInBucket > 0 else { return }
-            minSamples[bucketIndex] = bucketMin
-            maxSamples[bucketIndex] = bucketMax
-            rmsSamples[bucketIndex] = Float(sqrt(bucketSumSquares / Double(framesInBucket)))
-            bucketIndex += 1
+            guard framesInBucket > 0 else { return }
+            minSamples.append(bucketMin)
+            maxSamples.append(bucketMax)
+            rmsSamples.append(Float(sqrt(bucketSumSquares / Double(framesInBucket))))
             bucketMin = 0
             bucketMax = 0
             bucketSumSquares = 0
             framesInBucket = 0
         }
+
+        // Scratch buffer for the (rare) non-contiguous block buffer case
+        var copyBuffer: [Float] = []
 
         while let sampleBuffer = output.copyNextSampleBuffer() {
             if Task.isCancelled {
@@ -181,11 +197,12 @@ enum WaveformGenerator {
 
             if sampleRate == 0,
                let formatDescription = CMSampleBufferGetFormatDescription(sampleBuffer),
-               let asbd = CMAudioFormatDescriptionGetStreamBasicDescription(formatDescription)?.pointee {
+               let asbd = CMAudioFormatDescriptionGetStreamBasicDescription(formatDescription)?.pointee,
+               asbd.mSampleRate > 0 {
                 sampleRate = asbd.mSampleRate
                 channelCount = max(1, Int(asbd.mChannelsPerFrame))
-                let totalFrames = duration * sampleRate
-                framesPerBucket = max(1, Int(totalFrames / Double(totalBuckets)))
+                framesPerBucket = max(1, sampleRate / targetBucketsPerSecond)
+                nextBoundary = framesPerBucket
             }
 
             guard framesPerBucket > 0,
@@ -193,21 +210,8 @@ enum WaveformGenerator {
                 continue
             }
 
-            var length = 0
-            var dataPointer: UnsafeMutablePointer<Int8>?
-            let status = CMBlockBufferGetDataPointer(
-                blockBuffer,
-                atOffset: 0,
-                lengthAtOffsetOut: nil,
-                totalLengthOut: &length,
-                dataPointerOut: &dataPointer
-            )
-            guard status == kCMBlockBufferNoErr, let dataPointer else { continue }
-
-            let floatCount = length / MemoryLayout<Float>.size
-            let frameCount = floatCount / channelCount
-
-            dataPointer.withMemoryRebound(to: Float.self, capacity: floatCount) { floats in
+            let processFloats: (UnsafePointer<Float>, Int) -> Void = { floats, floatCount in
+                let frameCount = floatCount / channelCount
                 for frame in 0..<frameCount {
                     // Mix interleaved channels to mono
                     var mono: Float = 0
@@ -221,10 +225,51 @@ enum WaveformGenerator {
                     if mono > bucketMax { bucketMax = mono }
                     bucketSumSquares += Double(mono * mono)
                     framesInBucket += 1
+                    frameIndex += 1
 
-                    if framesInBucket >= framesPerBucket {
+                    if Double(frameIndex) >= nextBoundary {
                         flushBucket()
+                        nextBoundary += framesPerBucket
                     }
+                }
+            }
+
+            var lengthAtOffset = 0
+            var totalLength = 0
+            var dataPointer: UnsafeMutablePointer<Int8>?
+            let status = CMBlockBufferGetDataPointer(
+                blockBuffer,
+                atOffset: 0,
+                lengthAtOffsetOut: &lengthAtOffset,
+                totalLengthOut: &totalLength,
+                dataPointerOut: &dataPointer
+            )
+            guard status == kCMBlockBufferNoErr else { continue }
+
+            let floatCount = totalLength / MemoryLayout<Float>.size
+
+            if let dataPointer, lengthAtOffset == totalLength {
+                // Contiguous (the normal case): read in place
+                dataPointer.withMemoryRebound(to: Float.self, capacity: floatCount) { floats in
+                    processFloats(floats, floatCount)
+                }
+            } else {
+                // Non-contiguous: the pointer only covers the first segment,
+                // so copy the whole buffer out rather than read past it.
+                if copyBuffer.count < floatCount {
+                    copyBuffer = [Float](repeating: 0, count: floatCount)
+                }
+                let copyStatus = copyBuffer.withUnsafeMutableBytes { raw in
+                    CMBlockBufferCopyDataBytes(
+                        blockBuffer,
+                        atOffset: 0,
+                        dataLength: floatCount * MemoryLayout<Float>.size,
+                        destination: raw.baseAddress!
+                    )
+                }
+                guard copyStatus == kCMBlockBufferNoErr else { continue }
+                copyBuffer.withUnsafeBufferPointer { floats in
+                    processFloats(floats.baseAddress!, floatCount)
                 }
             }
         }
@@ -232,15 +277,8 @@ enum WaveformGenerator {
         flushBucket()
         reader.cancelReading()
 
-        guard bucketIndex > 0 else {
+        guard !maxSamples.isEmpty, framesPerBucket > 0 else {
             throw WaveformError.readingFailed
-        }
-
-        // Trim unfilled tail (decoder can deliver slightly less than duration)
-        if bucketIndex < totalBuckets {
-            minSamples.removeLast(totalBuckets - bucketIndex)
-            maxSamples.removeLast(totalBuckets - bucketIndex)
-            rmsSamples.removeLast(totalBuckets - bucketIndex)
         }
 
         let maxPeak = maxSamples.max() ?? 0
@@ -252,7 +290,8 @@ enum WaveformGenerator {
             maxSamples: maxSamples,
             rmsSamples: rmsSamples,
             duration: duration,
-            peakLevel: peakLevel
+            peakLevel: peakLevel,
+            bucketsPerSecond: sampleRate / framesPerBucket
         )
     }
 }
