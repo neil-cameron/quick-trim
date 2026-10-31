@@ -3,6 +3,7 @@
 //  QuickTrim
 //
 //  Custom About window (QuickTrim › About QuickTrim) and the Help menu.
+//  The help window itself is in HelpCenter.swift.
 //
 
 import SwiftUI
@@ -57,7 +58,7 @@ struct AboutView: View {
             }
 
             Button("QuickTrim Help") {
-                QuickTrimHelp.open()
+                HelpCenter.show()
             }
             .buttonStyle(.link)
             .padding(.top, 14)
@@ -74,23 +75,6 @@ struct AboutView: View {
     }
 }
 
-/// Opens the bundled Apple Help Book (QuickTrim.help) in Help Viewer.
-enum QuickTrimHelp {
-    static var bookName: String {
-        Bundle.main.object(forInfoDictionaryKey: "CFBundleHelpBookName") as? String
-            ?? "com.quicktrim.app.help"
-    }
-
-    static func open() {
-        NSApp.showHelp(nil)
-    }
-
-    /// Opens the help book at a named anchor (see the `<a name>` tags in the pages).
-    static func open(anchor: String) {
-        NSHelpManager.shared.openHelpAnchor(anchor, inBook: bookName)
-    }
-}
-
 /// Replaces the standard About panel and Help menu items.
 struct AboutAndHelpCommands: Commands {
     @Environment(\.openWindow) private var openWindow
@@ -104,20 +88,20 @@ struct AboutAndHelpCommands: Commands {
 
         CommandGroup(replacing: .help) {
             Button("QuickTrim Help") {
-                QuickTrimHelp.open()
+                HelpCenter.show()
             }
             .keyboardShortcut("?", modifiers: .command)
 
             Divider()
 
             Button("Keyboard Shortcuts") {
-                QuickTrimHelp.open(anchor: "shortcuts")
+                HelpCenter.show("shortcuts")
             }
             Button("Exporting and File Formats") {
-                QuickTrimHelp.open(anchor: "export")
+                HelpCenter.show("export")
             }
             Button("Troubleshooting") {
-                QuickTrimHelp.open(anchor: "troubleshooting")
+                HelpCenter.show("troubleshooting")
             }
         }
     }

@@ -9,7 +9,7 @@
   - `Assets.xcassets/`: App icons and asset catalogs.
   - `Info.plist`, `QuickTrim.entitlements`, `QuickTrimApp.swift`: app configuration and entry point.
 - `QuickTrim/generate_icons.sh`: Helper script for regenerating AppIcon PNGs from SVG.
-- `QuickTrim/QuickTrim/QuickTrim.help`: Apple Help Book (opened by Help › QuickTrim Help / ⌘?). Pages are plain HTML in `Contents/Resources/en.lproj`; `<a name="…">` anchors are linked from the Help menu (`AboutView.swift`). After editing pages run `QuickTrim/build_help_index.sh` (rebuilds the search index and bumps the book's version so Help Viewer doesn't show a cached copy), then rebuild the app.
+- `QuickTrim/QuickTrim/Help`: in-app help pages (plain HTML + `style.css`), shown in the Help window by `Views/HelpCenter.swift` and searchable from the Help menu's search field. To add a page, add the HTML file and a `Topic` entry in `HelpCenter.topics`.
 - `Icon/`: Source artwork and exported icon assets. Do not edit generated app icon PNGs directly unless regenerating the catalog.
 - `README.md`: User-facing app overview, shortcuts, and supported formats.
 

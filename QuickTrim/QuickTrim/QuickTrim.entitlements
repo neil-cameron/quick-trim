@@ -8,5 +8,10 @@
 	<true/>
 	<key>com.apple.security.files.user-selected.read-write</key>
 	<true/>
+	<!-- Required by WebKit in a sandboxed app: the Help window's WKWebView
+	     cannot start its networking process without it, even for local pages.
+	     QuickTrim itself makes no network connections. -->
+	<key>com.apple.security.network.client</key>
+	<true/>
 </dict>
 </plist>

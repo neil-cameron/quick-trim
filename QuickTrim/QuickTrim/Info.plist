@@ -40,10 +40,6 @@
 	</array>
 	<key>CFBundleExecutable</key>
 	<string>$(EXECUTABLE_NAME)</string>
-	<key>CFBundleHelpBookFolder</key>
-	<string>QuickTrim.help</string>
-	<key>CFBundleHelpBookName</key>
-	<string>com.quicktrim.app.help</string>
 	<key>CFBundleIconFile</key>
 	<string></string>
 	<key>CFBundleIdentifier</key>

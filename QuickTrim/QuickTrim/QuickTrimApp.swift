@@ -84,95 +84,67 @@ struct QuickTrimApp: App {
 
             CommandMenu("Playback") {
                 Button("Play/Pause") {
-                    getFocusedAppState()?.togglePlayPause()
+                    trimShortcut { $0.togglePlayPause() }
                 }
                 .keyboardShortcut(" ", modifiers: [])
 
                 Button("Go to Start") {
-                    if let editor = activeTextEditor() {
-                        editor.moveToBeginningOfLine(nil)
-                    } else {
-                        getFocusedAppState()?.seekToStart()
-                    }
+                    trimShortcut { $0.seekToStart() }
                 }
                 .keyboardShortcut(.home, modifiers: [])
 
                 Divider()
 
                 Button("Go Back 1 Frame") {
-                    if let editor = activeTextEditor() {
-                        editor.moveLeft(nil)
-                    } else {
-                        getFocusedAppState()?.stepFrame(forward: false)
-                    }
+                    trimShortcut { $0.stepFrame(forward: false) }
                 }
                 .keyboardShortcut(.leftArrow, modifiers: [])
 
                 Button("Go Forward 1 Frame") {
-                    if let editor = activeTextEditor() {
-                        editor.moveRight(nil)
-                    } else {
-                        getFocusedAppState()?.stepFrame(forward: true)
-                    }
+                    trimShortcut { $0.stepFrame(forward: true) }
                 }
                 .keyboardShortcut(.rightArrow, modifiers: [])
 
                 Divider()
 
                 Button("Go Back 10 Frames") {
-                    if let editor = activeTextEditor() {
-                        editor.moveLeftAndModifySelection(nil)
-                    } else {
-                        getFocusedAppState()?.stepFrames(-10)
-                    }
+                    trimShortcut { $0.stepFrames(-10) }
                 }
                 .keyboardShortcut(.leftArrow, modifiers: .shift)
 
                 Button("Go Forward 10 Frames") {
-                    if let editor = activeTextEditor() {
-                        editor.moveRightAndModifySelection(nil)
-                    } else {
-                        getFocusedAppState()?.stepFrames(10)
-                    }
+                    trimShortcut { $0.stepFrames(10) }
                 }
                 .keyboardShortcut(.rightArrow, modifiers: .shift)
 
                 Divider()
 
                 Button("Go Back 1 Second") {
-                    if let editor = activeTextEditor() {
-                        editor.moveToBeginningOfLineAndModifySelection(nil)
-                    } else {
-                        getFocusedAppState()?.stepSeconds(-1)
-                    }
+                    trimShortcut { $0.stepSeconds(-1) }
                 }
                 .keyboardShortcut(.leftArrow, modifiers: [.command, .shift])
 
                 Button("Go Forward 1 Second") {
-                    if let editor = activeTextEditor() {
-                        editor.moveToEndOfLineAndModifySelection(nil)
-                    } else {
-                        getFocusedAppState()?.stepSeconds(1)
-                    }
+                    trimShortcut { $0.stepSeconds(1) }
                 }
                 .keyboardShortcut(.rightArrow, modifiers: [.command, .shift])
             }
 
             CommandMenu("Timeline") {
                 Button("Mark Trim") {
-                    getFocusedAppState()?.markTrim()
+                    trimShortcut { $0.markTrim() }
                 }
                 .keyboardShortcut("m", modifiers: [])
 
                 Divider()
 
                 Button("Toggle Bin for Current Region") {
-                    getFocusedAppState()?.toggleBinForCurrentRegion()
+                    trimShortcut { $0.toggleBinForCurrentRegion() }
                 }
                 .keyboardShortcut("b", modifiers: [])
 
                 Button("Remove Current Region Start Marker") {
-                    getFocusedAppState()?.removeStartMarkerForCurrentRegion()
+                    trimShortcut { $0.removeStartMarkerForCurrentRegion() }
                 }
                 .keyboardShortcut("b", modifiers: .option)
 
@@ -241,12 +213,31 @@ struct QuickTrimApp: App {
         WindowManager.shared.openNewWindow()
     }
 
-    /// The field editor of a text field being typed in (e.g. a crop value).
-    /// Menu key equivalents fire before the field sees the key, so shortcuts
-    /// that double as text-editing keys (arrows, Home, ⌘Z) hand the key to
-    /// the editor instead of driving playback or region undo.
+    /// The field editor of a text field being typed in (a crop value, the
+    /// Help search field…).
     private func activeTextEditor() -> NSTextView? {
         NSApp.keyWindow?.firstResponder as? NSTextView
+    }
+
+    /// Runs a bare-key shortcut (Space, M, B, arrows, Home) on the focused
+    /// trim window. Menu key equivalents fire before the focused view sees
+    /// the key, so when you're typing in a text field, or the front window
+    /// isn't a trim window (Help, About), the keystroke is passed on instead —
+    /// otherwise typing "markers" in Help search would lose its m, and Space
+    /// couldn't scroll a help page.
+    private func trimShortcut(_ action: (AppState) -> Void) {
+        guard activeTextEditor() == nil, let appState = getFocusedAppState() else {
+            passKeyToFocusedView()
+            return
+        }
+        action(appState)
+    }
+
+    private func passKeyToFocusedView() {
+        guard let event = NSApp.currentEvent, event.type == .keyDown,
+              let responder = NSApp.keyWindow?.firstResponder,
+              !(responder is NSWindow) else { return }  // a bare window would just beep
+        responder.keyDown(with: event)
     }
 
     private func getFocusedAppState() -> AppState? {
@@ -412,6 +403,11 @@ struct DocumentHostingViewRepresentable: NSViewRepresentable {
 }
 
 class AppDelegate: NSObject, NSApplicationDelegate {
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        // Help menu search: help topics listed beneath the menu commands
+        NSApp.registerUserInterfaceItemSearchHandler(HelpMenuSearch.shared)
+    }
+
     func application(_ application: NSApplication, open urls: [URL]) {
         guard let url = urls.first else { return }
 

@@ -19,7 +19,8 @@
 		A1000011263E8F5C00000001 /* VideoExporter.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1000012263E8F5C00000001 /* VideoExporter.swift */; };
 		A1C00001263E8F5C00000001 /* CropOverlayView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1C00002263E8F5C00000001 /* CropOverlayView.swift */; };
 		A1D00001263E8F5C00000001 /* WaveformRendererView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1D00002263E8F5C00000001 /* WaveformRendererView.swift */; };
-		A1E00001263E8F5C00000001 /* QuickTrim.help in Resources */ = {isa = PBXBuildFile; fileRef = A1E00002263E8F5C00000001 /* QuickTrim.help */; };
+		A1E00001263E8F5C00000001 /* Help in Resources */ = {isa = PBXBuildFile; fileRef = A1E00002263E8F5C00000001 /* Help */; };
+		A1F10001263E8F5C00000001 /* HelpCenter.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1F10002263E8F5C00000001 /* HelpCenter.swift */; };
 		A1F00001263E8F5C00000001 /* AboutView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1F00002263E8F5C00000001 /* AboutView.swift */; };
 /* End PBXBuildFile section */
 
@@ -39,7 +40,8 @@
 		A1000015263E8F5C00000001 /* QuickTrim.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = QuickTrim.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		A1C00002263E8F5C00000001 /* CropOverlayView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CropOverlayView.swift; sourceTree = "<group>"; };
 		A1D00002263E8F5C00000001 /* WaveformRendererView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WaveformRendererView.swift; sourceTree = "<group>"; };
-		A1E00002263E8F5C00000001 /* QuickTrim.help */ = {isa = PBXFileReference; lastKnownFileType = folder; path = QuickTrim.help; sourceTree = "<group>"; };
+		A1E00002263E8F5C00000001 /* Help */ = {isa = PBXFileReference; lastKnownFileType = folder; path = Help; sourceTree = "<group>"; };
+		A1F10002263E8F5C00000001 /* HelpCenter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HelpCenter.swift; sourceTree = "<group>"; };
 		A1F00002263E8F5C00000001 /* AboutView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AboutView.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
@@ -70,7 +72,7 @@
 				A100001B263E8F5C00000001 /* Models */,
 				A100001C263E8F5C00000001 /* Services */,
 				A1000006263E8F5C00000001 /* Assets.xcassets */,
-				A1E00002263E8F5C00000001 /* QuickTrim.help */,
+				A1E00002263E8F5C00000001 /* Help */,
 				A1000013263E8F5C00000001 /* Info.plist */,
 				A1000014263E8F5C00000001 /* QuickTrim.entitlements */,
 			);
@@ -95,6 +97,7 @@
 				A1C00002263E8F5C00000001 /* CropOverlayView.swift */,
 				A1D00002263E8F5C00000001 /* WaveformRendererView.swift */,
 				A1F00002263E8F5C00000001 /* AboutView.swift */,
+				A1F10002263E8F5C00000001 /* HelpCenter.swift */,
 			);
 			path = Views;
 			sourceTree = "<group>";
@@ -176,7 +179,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				A1000005263E8F5C00000001 /* Assets.xcassets in Resources */,
-				A1E00001263E8F5C00000001 /* QuickTrim.help in Resources */,
+				A1E00001263E8F5C00000001 /* Help in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -199,6 +202,7 @@
 				A1C00001263E8F5C00000001 /* CropOverlayView.swift in Sources */,
 				A1D00001263E8F5C00000001 /* WaveformRendererView.swift in Sources */,
 				A1F00001263E8F5C00000001 /* AboutView.swift in Sources */,
+				A1F10001263E8F5C00000001 /* HelpCenter.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
