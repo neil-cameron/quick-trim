@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Export</title>
+<meta name="description" content="Export kept regions as a new file: formats, options, and lossless export.">
+<meta name="robots" content="index, anchors">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div class="nav"><a href="index.html">QuickTrim Help</a></div>
+
+<a name="export"></a>
+<h1>Export</h1>
+<p class="lead">Click Export or press <kbd>⇧⌘E</kbd>. QuickTrim joins the kept regions in order and saves them as a new file. Your original file isn’t changed.</p>
+
+<a name="lossless"></a>
+<h2>Lossless by default</h2>
+<p>Normally QuickTrim copies the original audio and video data without re-encoding it. That’s fast and keeps the original quality. It re-encodes only when it has to: when you crop, when you turn on Transcode output, or when the original format can’t be copied into the file type you chose.</p>
+
+<a name="options"></a>
+<h2>Export options</h2>
+<p>Click the gear button beside Export:</p>
+<table>
+  <tr><td><strong>No sound</strong></td><td>Exports the video without its audio. Video files only.</td></tr>
+  <tr><td><strong>Transcode output</strong></td><td>Re-encodes instead of copying. Slower, but useful if another app has trouble with a losslessly exported file.</td></tr>
+</table>
+
+<a name="formats"></a>
+<h2>File formats</h2>
+<table>
+  <tr><th>Original</th><th>You can export as</th></tr>
+  <tr><td>Video (MOV, MP4, M4V…)</td><td>MOV, MP4 or M4V. The extension you type chooses the format; the suggested name matches your original.</td></tr>
+  <tr><td>WAV</td><td>WAV, or M4A (AAC)</td></tr>
+  <tr><td>AIFF</td><td>AIFF, or M4A (AAC)</td></tr>
+  <tr><td>MP3, M4A and other compressed audio</td><td>M4A. macOS can’t create MP3 files.</td></tr>
+</table>
+<p>Audio from every track is kept. Recordings with separate microphone and system-audio tracks export with both.</p>
+
+<div class="note warn">You can’t export over the file you’re trimming. Choose a different name or location.</div>
+
+<footer>QuickTrim by Neil Cameron</footer>
+</body>
+</html>

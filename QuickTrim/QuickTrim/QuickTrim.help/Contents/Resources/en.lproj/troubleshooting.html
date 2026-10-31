@@ -1,0 +1,36 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Troubleshooting</title>
+<meta name="description" content="Fix files that won't open, exports that fail, and other problems.">
+<meta name="robots" content="index, anchors">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div class="nav"><a href="index.html">QuickTrim Help</a></div>
+
+<a name="troubleshooting"></a>
+<h1>Troubleshooting</h1>
+
+<h3>“Could Not Open” when opening a file</h3>
+<p>The file has no video or audio that macOS can play, or it’s in a format macOS doesn’t support (such as many AVI files). Try converting it to MP4 or MOV with another app first.</p>
+
+<h3>I can’t choose WAV when exporting an MP3</h3>
+<p>Compressed audio such as MP3 can only be exported as M4A. WAV and AIFF are available when the original is WAV or AIFF. See <a href="export.html#formats">File formats</a>.</p>
+
+<h3>An exported file misbehaves in another app</h3>
+<p>Lossless exports copy the original data exactly. A few apps handle such files poorly at the cut points. Turn on Transcode output in the export options and export again.</p>
+
+<h3>Export failed</h3>
+<p>Check there’s enough free space at the destination and that you’re not exporting over the original file. If it still fails, try Transcode output.</p>
+
+<h3>The Export button is dimmed</h3>
+<p>Every region is binned, so there’s nothing to export. Keep at least one region with <kbd>B</kbd> or its trash button.</p>
+
+<h3>The waveform is very small or flat</h3>
+<p>The recording is extremely quiet or silent. The waveform is scaled to each file’s loudest moment, up to a limit, so near-silent files stay flat rather than magnifying noise.</p>
+
+<footer>QuickTrim by Neil Cameron</footer>
+</body>
+</html>

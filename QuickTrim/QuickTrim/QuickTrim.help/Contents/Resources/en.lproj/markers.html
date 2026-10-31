@@ -1,0 +1,33 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Move and remove markers</title>
+<meta name="description" content="Drag a marker to adjust a cut, or remove it to merge two regions.">
+<meta name="robots" content="index, anchors">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div class="nav"><a href="index.html">QuickTrim Help</a></div>
+
+<a name="markers"></a>
+<h1>Move and remove markers</h1>
+<p class="lead">Markers are the yellow lines on the timeline. Each one is a cut between two regions.</p>
+
+<a name="drag"></a>
+<h2>Move a marker</h2>
+<p>Point at a marker until it turns orange and the pointer changes, then drag it. The picture follows so you can see the exact frame you’re cutting at. Markers snap to whole frames and can’t pass their neighbours. The whole drag is one undo step.</p>
+
+<a name="remove"></a>
+<h2>Remove a marker</h2>
+<ul>
+  <li><strong>On the timeline:</strong> hold <kbd>⌥</kbd> and move the pointer near a marker. It turns red and shows a delete button. Click it.</li>
+  <li><strong>In the Regions list:</strong> hold <kbd>⌥</kbd> so the trash buttons become remove buttons, then click one to remove that region’s starting marker.</li>
+  <li><strong>From the keyboard:</strong> press <kbd>⌥B</kbd> to remove the starting marker of the region under the playhead.</li>
+</ul>
+<p>Removing a marker merges the region after it into the region before it, and the merged region keeps the earlier region’s kept or binned state.</p>
+<div class="note">While <kbd>⌥</kbd> is held, skimming pauses so the playhead stays put while you aim.</div>
+
+<footer>QuickTrim by Neil Cameron</footer>
+</body>
+</html>

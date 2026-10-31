@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Trim with regions</title>
+<meta name="description" content="Split a file into regions, bin the ones you don't want, and preview the result.">
+<meta name="robots" content="index, anchors">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div class="nav"><a href="index.html">QuickTrim Help</a></div>
+
+<a name="regions"></a>
+<h1>Trim with regions</h1>
+<p class="lead">Each cut you mark splits the file into regions. Every region is either <span class="kept">kept</span> or <span class="binned">binned</span>. Only kept regions are exported, in order.</p>
+
+<h2>Mark a cut</h2>
+<p>Move the playhead to the frame where you want to cut, then press <kbd>M</kbd> or click Mark Trim. A yellow marker appears on the timeline and the region is split in two.</p>
+
+<h2>Bin or keep a region</h2>
+<ul>
+  <li>Press <kbd>B</kbd> to toggle the region under the playhead between kept and binned.</li>
+  <li>Or click the trash button next to a region in the Regions list.</li>
+</ul>
+<p>Binned regions show in red on the timeline and are struck through in the Regions list. Click a region in the list to jump to its start.</p>
+
+<a name="preview"></a>
+<h2>Preview what you’ll export</h2>
+<p>Click Preview or press <kbd>⌥⌘P</kbd>. The timeline collapses to show only kept regions, and playback skips everything you’ve binned. The scissors timecode above the timeline always shows the trimmed length.</p>
+
+<h2>Undo and redo</h2>
+<p>Choose Edit &gt; Undo (<kbd>⌘Z</kbd>) or Redo (<kbd>⇧⌘Z</kbd>). Marking, binning, moving and removing markers can all be undone. Your undo history is kept after you export, so you can adjust and export again.</p>
+
+<a name="unsaved"></a>
+<h2>Closing with unexported changes</h2>
+<p>If you’ve made regions that haven’t been exported, QuickTrim asks before closing the window or quitting, so you don’t lose your work by accident.</p>
+
+<footer>QuickTrim by Neil Cameron</footer>
+</body>
+</html>

@@ -220,8 +220,20 @@ struct QuickTrimApp: App {
                 }
                 .keyboardShortcut("-", modifiers: .command)
             }
+
+            AboutAndHelpCommands()
         }
         .windowResizability(.contentSize)
+
+        // About window (QuickTrim › About QuickTrim). commandsRemoved() keeps
+        // it out of the Window menu; it's opened from the app menu only.
+        Window("About QuickTrim", id: "about") {
+            AboutView()
+        }
+        .windowStyle(.hiddenTitleBar)
+        .windowResizability(.contentSize)
+        .defaultPosition(.center)
+        .commandsRemoved()
     }
 
     private func openNewWindow() {

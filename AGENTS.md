@@ -9,6 +9,7 @@
   - `Assets.xcassets/`: App icons and asset catalogs.
   - `Info.plist`, `QuickTrim.entitlements`, `QuickTrimApp.swift`: app configuration and entry point.
 - `QuickTrim/generate_icons.sh`: Helper script for regenerating AppIcon PNGs from SVG.
+- `QuickTrim/QuickTrim/QuickTrim.help`: Apple Help Book (opened by Help › QuickTrim Help / ⌘?). Pages are plain HTML in `Contents/Resources/en.lproj`; `<a name="…">` anchors are linked from the Help menu (`AboutView.swift`). After editing pages run `QuickTrim/build_help_index.sh` (rebuilds the search index and bumps the book's version so Help Viewer doesn't show a cached copy), then rebuild the app.
 - `Icon/`: Source artwork and exported icon assets. Do not edit generated app icon PNGs directly unless regenerating the catalog.
 - `README.md`: User-facing app overview, shortcuts, and supported formats.
 
@@ -22,7 +23,7 @@
 - Types and files use UpperCamelCase (e.g., `TimelineView.swift`).
 - Views are colocated in `Views/`, services in `Services/`, and models in `Models/`.
 - Keep UI strings short and user-facing; prefer `AppState` for shared state.
-- Keep README shortcuts and supported formats in sync with `AppState` and the SwiftUI command/menu handlers.
+- Keep README and the Help Book's shortcuts and supported formats in sync with `AppState` and the SwiftUI command/menu handlers.
 
 ## Testing Guidelines
 - No automated test targets are present currently.

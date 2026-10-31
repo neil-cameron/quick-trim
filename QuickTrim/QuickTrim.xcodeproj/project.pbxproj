@@ -19,6 +19,8 @@
 		A1000011263E8F5C00000001 /* VideoExporter.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1000012263E8F5C00000001 /* VideoExporter.swift */; };
 		A1C00001263E8F5C00000001 /* CropOverlayView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1C00002263E8F5C00000001 /* CropOverlayView.swift */; };
 		A1D00001263E8F5C00000001 /* WaveformRendererView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1D00002263E8F5C00000001 /* WaveformRendererView.swift */; };
+		A1E00001263E8F5C00000001 /* QuickTrim.help in Resources */ = {isa = PBXBuildFile; fileRef = A1E00002263E8F5C00000001 /* QuickTrim.help */; };
+		A1F00001263E8F5C00000001 /* AboutView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1F00002263E8F5C00000001 /* AboutView.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -37,6 +39,8 @@
 		A1000015263E8F5C00000001 /* QuickTrim.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = QuickTrim.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		A1C00002263E8F5C00000001 /* CropOverlayView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CropOverlayView.swift; sourceTree = "<group>"; };
 		A1D00002263E8F5C00000001 /* WaveformRendererView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WaveformRendererView.swift; sourceTree = "<group>"; };
+		A1E00002263E8F5C00000001 /* QuickTrim.help */ = {isa = PBXFileReference; lastKnownFileType = folder; path = QuickTrim.help; sourceTree = "<group>"; };
+		A1F00002263E8F5C00000001 /* AboutView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AboutView.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -66,6 +70,7 @@
 				A100001B263E8F5C00000001 /* Models */,
 				A100001C263E8F5C00000001 /* Services */,
 				A1000006263E8F5C00000001 /* Assets.xcassets */,
+				A1E00002263E8F5C00000001 /* QuickTrim.help */,
 				A1000013263E8F5C00000001 /* Info.plist */,
 				A1000014263E8F5C00000001 /* QuickTrim.entitlements */,
 			);
@@ -89,6 +94,7 @@
 				A1000010263E8F5C00000001 /* RegionsPaneView.swift */,
 				A1C00002263E8F5C00000001 /* CropOverlayView.swift */,
 				A1D00002263E8F5C00000001 /* WaveformRendererView.swift */,
+				A1F00002263E8F5C00000001 /* AboutView.swift */,
 			);
 			path = Views;
 			sourceTree = "<group>";
@@ -170,6 +176,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				A1000005263E8F5C00000001 /* Assets.xcassets in Resources */,
+				A1E00001263E8F5C00000001 /* QuickTrim.help in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -191,6 +198,7 @@
 				A1000011263E8F5C00000001 /* VideoExporter.swift in Sources */,
 				A1C00001263E8F5C00000001 /* CropOverlayView.swift in Sources */,
 				A1D00001263E8F5C00000001 /* WaveformRendererView.swift in Sources */,
+				A1F00001263E8F5C00000001 /* AboutView.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -339,7 +347,7 @@
 				INFOPLIST_FILE = QuickTrim/Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = QuickTrim;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.video";
-				INFOPLIST_KEY_NSHumanReadableCopyright = "";
+				INFOPLIST_KEY_NSHumanReadableCopyright = "© 2026 Neil Cameron";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/../Frameworks",
@@ -382,7 +390,7 @@
 				INFOPLIST_FILE = QuickTrim/Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = QuickTrim;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.video";
-				INFOPLIST_KEY_NSHumanReadableCopyright = "";
+				INFOPLIST_KEY_NSHumanReadableCopyright = "© 2026 Neil Cameron";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/../Frameworks",
