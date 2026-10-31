@@ -173,10 +173,16 @@ struct RegionRowView: View {
                         .font(.title3)
                 }
             }
-            .onAppear {
-                if !appState.isAudioOnly {
-                    loadThumbnail()
+            // Reload when the region's span changes (e.g. a dragged marker).
+            // task(id:) cancels the previous run, so the short sleep debounces
+            // a drag into one thumbnail load once it settles.
+            .task(id: region.middleTime) {
+                guard !appState.isAudioOnly else { return }
+                if thumbnail != nil {
+                    try? await Task.sleep(nanoseconds: 250_000_000)
+                    if Task.isCancelled { return }
                 }
+                loadThumbnail()
             }
 
             // Region info

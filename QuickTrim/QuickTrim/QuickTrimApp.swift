@@ -44,14 +44,40 @@ struct QuickTrimApp: App {
                 .keyboardShortcut("e", modifiers: [.command, .shift])
             }
 
+            // Close / Close All go through WindowCloseGuard so unexported
+            // regions aren't lost silently (⌘W used to close without asking).
+            CommandGroup(replacing: .saveItem) {
+                Button("Close") {
+                    if let window = NSApp.keyWindow {
+                        WindowCloseGuard.requestClose(window)
+                    }
+                }
+                .keyboardShortcut("w", modifiers: .command)
+
+                Button("Close All") {
+                    for window in NSApp.windows where window.isVisible {
+                        WindowCloseGuard.requestClose(window)
+                    }
+                }
+                .keyboardShortcut("w", modifiers: [.command, .option])
+            }
+
             CommandGroup(replacing: .undoRedo) {
                 Button("Undo") {
-                    getFocusedAppState()?.undo()
+                    if let editor = activeTextEditor() {
+                        editor.undoManager?.undo()
+                    } else {
+                        getFocusedAppState()?.undo()
+                    }
                 }
                 .keyboardShortcut("z", modifiers: .command)
 
                 Button("Redo") {
-                    getFocusedAppState()?.redo()
+                    if let editor = activeTextEditor() {
+                        editor.undoManager?.redo()
+                    } else {
+                        getFocusedAppState()?.redo()
+                    }
                 }
                 .keyboardShortcut("z", modifiers: [.command, .shift])
             }
@@ -63,43 +89,71 @@ struct QuickTrimApp: App {
                 .keyboardShortcut(" ", modifiers: [])
 
                 Button("Go to Start") {
-                    getFocusedAppState()?.seekToStart()
+                    if let editor = activeTextEditor() {
+                        editor.moveToBeginningOfLine(nil)
+                    } else {
+                        getFocusedAppState()?.seekToStart()
+                    }
                 }
                 .keyboardShortcut(.home, modifiers: [])
 
                 Divider()
 
                 Button("Go Back 1 Frame") {
-                    getFocusedAppState()?.stepFrame(forward: false)
+                    if let editor = activeTextEditor() {
+                        editor.moveLeft(nil)
+                    } else {
+                        getFocusedAppState()?.stepFrame(forward: false)
+                    }
                 }
                 .keyboardShortcut(.leftArrow, modifiers: [])
 
                 Button("Go Forward 1 Frame") {
-                    getFocusedAppState()?.stepFrame(forward: true)
+                    if let editor = activeTextEditor() {
+                        editor.moveRight(nil)
+                    } else {
+                        getFocusedAppState()?.stepFrame(forward: true)
+                    }
                 }
                 .keyboardShortcut(.rightArrow, modifiers: [])
 
                 Divider()
 
                 Button("Go Back 10 Frames") {
-                    getFocusedAppState()?.stepFrames(-10)
+                    if let editor = activeTextEditor() {
+                        editor.moveLeftAndModifySelection(nil)
+                    } else {
+                        getFocusedAppState()?.stepFrames(-10)
+                    }
                 }
                 .keyboardShortcut(.leftArrow, modifiers: .shift)
 
                 Button("Go Forward 10 Frames") {
-                    getFocusedAppState()?.stepFrames(10)
+                    if let editor = activeTextEditor() {
+                        editor.moveRightAndModifySelection(nil)
+                    } else {
+                        getFocusedAppState()?.stepFrames(10)
+                    }
                 }
                 .keyboardShortcut(.rightArrow, modifiers: .shift)
 
                 Divider()
 
                 Button("Go Back 1 Second") {
-                    getFocusedAppState()?.stepSeconds(-1)
+                    if let editor = activeTextEditor() {
+                        editor.moveToBeginningOfLineAndModifySelection(nil)
+                    } else {
+                        getFocusedAppState()?.stepSeconds(-1)
+                    }
                 }
                 .keyboardShortcut(.leftArrow, modifiers: [.command, .shift])
 
                 Button("Go Forward 1 Second") {
-                    getFocusedAppState()?.stepSeconds(1)
+                    if let editor = activeTextEditor() {
+                        editor.moveToEndOfLineAndModifySelection(nil)
+                    } else {
+                        getFocusedAppState()?.stepSeconds(1)
+                    }
                 }
                 .keyboardShortcut(.rightArrow, modifiers: [.command, .shift])
             }
@@ -175,6 +229,14 @@ struct QuickTrimApp: App {
         WindowManager.shared.openNewWindow()
     }
 
+    /// The field editor of a text field being typed in (e.g. a crop value).
+    /// Menu key equivalents fire before the field sees the key, so shortcuts
+    /// that double as text-editing keys (arrows, Home, ⌘Z) hand the key to
+    /// the editor instead of driving playback or region undo.
+    private func activeTextEditor() -> NSTextView? {
+        NSApp.keyWindow?.firstResponder as? NSTextView
+    }
+
     private func getFocusedAppState() -> AppState? {
         guard let window = NSApp.keyWindow,
               let contentView = window.contentView,
@@ -222,9 +284,60 @@ class WindowManager {
     }
 }
 
+// MARK: - Window Close Guard
+
+/// Confirms before closing a window whose trim regions haven't been exported.
+///
+/// SwiftUI owns each window's delegate, so rather than replacing it (which can
+/// break SwiftUI's window management) the two real close routes — the title
+/// bar close button and File › Close — are routed through here.
+enum WindowCloseGuard {
+    static func requestClose(_ window: NSWindow) {
+        guard let contentView = window.contentView,
+              let hostingView = DocumentHostingView.find(in: contentView) else {
+            // Not a QuickTrim document window (e.g. About): normal close
+            window.performClose(nil)
+            return
+        }
+
+        guard let appState = hostingView.appState, appState.hasUserCreatedRegions else {
+            window.close()
+            return
+        }
+
+        let name = appState.videoURL?.lastPathComponent ?? "this file"
+        let alert = NSAlert()
+        alert.messageText = "Close Without Exporting?"
+        alert.informativeText = "Your trim regions for \u{201C}\(name)\u{201D} haven't been exported and will be lost."
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: "Close")
+        alert.addButton(withTitle: "Cancel")
+        alert.beginSheetModal(for: window) { response in
+            if response == .alertFirstButtonReturn {
+                // close(), not performClose(): skips re-asking, and avoids any
+                // chance of re-entering this guard via the close button
+                window.close()
+            }
+        }
+    }
+}
+
 // Custom hosting view to store AppState reference
 class DocumentHostingView: NSView {
     var appState: AppState?
+
+    /// Route the title bar's close button through WindowCloseGuard.
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        guard let closeButton = window?.standardWindowButton(.closeButton) else { return }
+        closeButton.target = self
+        closeButton.action = #selector(closeButtonPressed(_:))
+    }
+
+    @objc private func closeButtonPressed(_ sender: Any?) {
+        guard let window else { return }
+        WindowCloseGuard.requestClose(window)
+    }
 
     /// Recursively search a view hierarchy for a DocumentHostingView
     static func find(in view: NSView) -> DocumentHostingView? {

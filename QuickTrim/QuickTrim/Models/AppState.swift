@@ -359,15 +359,46 @@ class AppState: ObservableObject {
 
         saveStateForUndo()
 
+        // The region is absorbed into the previous one, so the previous
+        // region's kept/binned state wins (deleting the marker between a
+        // kept and a binned region must not bin the kept part).
         let previousRegion = regions[index - 1]
         let mergedRegion = Region(
             startTime: previousRegion.startTime,
-            endTime: region.endTime,
-            isBinned: region.isBinned
+            endTime: regions[index].endTime,
+            isBinned: previousRegion.isBinned
         )
 
         regions.removeSubrange((index - 1)...index)
         regions.insert(mergedRegion, at: index - 1)
+    }
+
+    // MARK: - Marker Dragging
+
+    /// Call once when a marker drag starts, so the whole drag is one undo step.
+    func beginMarkerDrag() {
+        saveStateForUndo()
+    }
+
+    /// Move marker `index` (the boundary between regions[index] and
+    /// regions[index + 1]) to `time`, snapped to a frame and clamped so
+    /// neither neighbouring region gets shorter than one frame.
+    /// Returns the time actually applied.
+    @discardableResult
+    func moveMarker(at index: Int, to time: Double) -> Double? {
+        guard index >= 0, index + 1 < regions.count else { return nil }
+
+        let frameDuration = 1.0 / frameRate
+        let lowerBound = regions[index].startTime + frameDuration
+        let upperBound = regions[index + 1].endTime - frameDuration
+        guard lowerBound <= upperBound else { return nil }
+
+        let snapped = (time * frameRate).rounded() / frameRate
+        let clamped = min(max(snapped, lowerBound), upperBound)
+
+        regions[index].endTime = clamped
+        regions[index + 1].startTime = clamped
+        return clamped
     }
 
     func removeStartMarkerForCurrentRegion() {

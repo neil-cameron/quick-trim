@@ -193,6 +193,10 @@ struct NormalTimelineContent: View {
 
     @State private var hoverX: CGFloat?
     @State private var isOptionPressed = false
+    @State private var draggingMarkerIndex: Int?
+    @State private var hoveredDragHandle: Int?
+
+    private static let coordinateSpaceName = "normalTimelineContent"
 
     /// How close (in points) the pointer must be to a marker to target it.
     private let markerHitRadius: CGFloat = 10
@@ -237,13 +241,16 @@ struct NormalTimelineContent: View {
                             .frame(height: geometry.size.height)
                         }
 
-                        // Region dividers (yellow vertical lines at trim points)
+                        // Region dividers (yellow vertical lines at trim points);
+                        // orange while hovered for dragging or being dragged
                         if appState.regions.count > 1 && appState.duration > 0 {
-                            ForEach(appState.regions.dropLast()) { region in
+                            ForEach(Array(appState.regions.dropLast().enumerated()), id: \.element.id) { index, region in
                                 let x = (region.endTime / appState.duration) * contentWidth
+                                let isActive = draggingMarkerIndex == index
+                                    || (hoveredDragHandle == index && !isOptionPressed)
                                 Rectangle()
-                                    .fill(Color.yellow)
-                                    .frame(width: 2, height: geometry.size.height)
+                                    .fill(isActive ? Color.orange : Color.yellow)
+                                    .frame(width: isActive ? 3 : 2, height: geometry.size.height)
                                     .position(x: x, y: geometry.size.height / 2)
                             }
                         }
@@ -267,6 +274,49 @@ struct NormalTimelineContent: View {
                             }
                         }
                         .allowsHitTesting(false)
+
+                        // Drag handles: a 12pt grab zone around each marker.
+                        // Hidden while Option is held (that's delete mode).
+                        if appState.regions.count > 1 && appState.duration > 0 && !isOptionPressed {
+                            ForEach(0..<(appState.regions.count - 1), id: \.self) { index in
+                                Color.clear
+                                    .contentShape(Rectangle())
+                                    .frame(width: 12, height: geometry.size.height)
+                                    .position(
+                                        x: markerX(index, contentWidth: contentWidth),
+                                        y: geometry.size.height / 2
+                                    )
+                                    .onHover { inside in
+                                        if inside {
+                                            hoveredDragHandle = index
+                                            NSCursor.resizeLeftRight.push()
+                                        } else {
+                                            if hoveredDragHandle == index { hoveredDragHandle = nil }
+                                            NSCursor.pop()
+                                        }
+                                    }
+                                    .gesture(
+                                        DragGesture(minimumDistance: 1, coordinateSpace: .named(Self.coordinateSpaceName))
+                                            .onChanged { value in
+                                                if draggingMarkerIndex == nil {
+                                                    draggingMarkerIndex = index
+                                                    appState.player?.pause()
+                                                    appState.stopSkimming()
+                                                    appState.beginMarkerDrag()
+                                                }
+                                                let time = timeFromPosition(value.location.x, width: contentWidth)
+                                                // Show the frame at the cut while dragging
+                                                if let applied = appState.moveMarker(at: index, to: time) {
+                                                    appState.seek(to: applied)
+                                                }
+                                            }
+                                            .onEnded { _ in
+                                                draggingMarkerIndex = nil
+                                            }
+                                    )
+                                    .help("Drag to move this marker")
+                            }
+                        }
 
                         // Option-hover near a marker: highlight it and offer delete
                         if let markerIndex = hoveredMarkerIndex(contentWidth: contentWidth) {
@@ -293,10 +343,12 @@ struct NormalTimelineContent: View {
                         }
                     }
                     .frame(width: contentWidth, height: geometry.size.height)
+                    .coordinateSpace(name: Self.coordinateSpaceName)
                     .contentShape(Rectangle())
                     .gesture(
                         DragGesture(minimumDistance: 0)
                             .onChanged { value in
+                                guard draggingMarkerIndex == nil else { return }
                                 let time = timeFromPosition(value.location.x, width: contentWidth)
                                 appState.seek(to: time)
                             }
@@ -305,8 +357,10 @@ struct NormalTimelineContent: View {
                         switch phase {
                         case .active(let location):
                             hoverX = location.x
-                            // Option = marker-editing mode: don't move the playhead
-                            guard appState.skimmingEnabled, !isOptionPressed else { return }
+                            // Option = marker-editing mode, or mid-drag: don't
+                            // let skimming move the playhead
+                            guard appState.skimmingEnabled, !isOptionPressed,
+                                  draggingMarkerIndex == nil else { return }
                             let time = timeFromPosition(location.x, width: contentWidth)
                             appState.skimTo(time: time)
                         case .ended:

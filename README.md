@@ -26,6 +26,7 @@ QuickTrim is a lightweight macOS app for fast, region-based trimming of video an
 - Go to start: `Home`
 - Toggle bin on current region: `B`
 - Remove current region start marker: `⌥B`
+- Move a marker: drag it on the timeline (snaps to frames; one undo step)
 - Remove a marker on the timeline: hold `Option`, hover near it, click the ✕
 - Remove region start marker from list: hold `Option` and click the remove-marker icon
 - Toggle Preview: `⌘⌥P`
